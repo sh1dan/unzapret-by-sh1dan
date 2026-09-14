@@ -66,14 +66,50 @@ jobs:
           Compress-Archive -Path run/* -DestinationPath $zipName -Force
           Get-Item $zipName
 
+      - name: Generate Beautiful Release Notes
+        shell: pwsh
+        run: |
+          $body = @"
+          ## Что нового в релизе `${{ github.ref_name }}`
+
+          * **YouTube**: мгновенное открытие видео вплоть до 4K 60fps без буферизации.
+          * **Discord**: текст, медиа и **Discord Voice** (голосовые каналы и звонки через профиль STUN/RTP портов 50001–50005).
+          * **Twitch**: прямые трансляции в исходном качестве без задержек.
+          * **Telegram**: десктопное приложение и веб-клиент.
+          * **Кастомные домены**: поддержка добавления любых сайтов в `config/domains.txt`.
+          * **Служба Windows (SCM)**: возможность работы в фоне без открытого окна консоли.
+
+          ---
+
+          ### 📦 Инструкция по быстрой установке
+
+          1. Скачайте архив **`unzapret-by-sh1dan-${{ github.ref_name }}-windows-x64.zip`** из блока **Assets** ниже.
+          2. Распакуйте архив в любую удобную папку (например, `C:\unzapret`).
+          3. Запустите **`start.cmd`** (программа запросит права администратора и запустит обход).
+          4. *Для работы в фоне*: запустите **`service_install.cmd`** (программа будет работать как служба Windows и автоматически включаться вместе с компьютером).
+
+          ---
+
+          ### 🛡️ Гарантии безопасности
+
+          * **100% Memory Safety**: ядро на Rust с `#![forbid(unsafe_code)]`.
+          * **Прямое соединение**: без сторонних VPN, прокси или туннелей (`клиент -> целевой сервер`).
+          * **Нулевая телеметрия**: отсутствие сбора данных, логи строго приватны (без SNI, IP и URL).
+          * **Чистое удаление**: скрипт `service_remove.cmd` полностью удаляет службу из системы.
+          "@
+          [System.IO.File]::WriteAllText("release_body.md", $body, [System.Text.Encoding]::UTF8)
+
       - name: Upload GitHub Release Asset
         uses: softprops/action-gh-release@v2
         with:
-          files: unzapret-by-sh1dan-*.zip
-          name: Release ${{ github.ref_name }}
+          files: |
+            unzapret-by-sh1dan-*.zip
+            run/SHA256SUMS.txt
+          name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
+          body_path: release_body.md
           draft: false
           prerelease: false
-          generate_release_notes: true
+
 
 
