@@ -1,9 +1,19 @@
-name: Phase 10 Release
-on: [push, pull_request, workflow_dispatch]
+name: CI & Release
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
 permissions:
-  contents: read
+  contents: write
+
 jobs:
   test:
+    name: Tests (${{ matrix.os }})
     strategy:
       matrix:
         os: [windows-latest, ubuntu-latest]
@@ -23,3 +33,31 @@ jobs:
           cargo run --offline -- service status
           cargo run --offline -- diagnose
           cargo run --offline -- logs
+
+  release:
+    name: Build & Publish Release
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Release Binary
+        run: cargo build --release --offline
+      - name: Update Run Package Binary
+        shell: pwsh
+        run: Copy-Item target/release/dpi-bypass.exe run/dpi-bypass.exe -Force
+      - name: Create Release Zip Package
+        shell: pwsh
+        run: |
+          $zipName = "unzapret-by-sh1dan-${{ github.ref_name }}-windows-x64.zip"
+          Compress-Archive -Path run/* -DestinationPath $zipName -Force
+          Get-Item $zipName
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: unzapret-by-sh1dan-*.zip
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+

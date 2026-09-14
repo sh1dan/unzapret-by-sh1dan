@@ -1,3 +1,3 @@
 @echo off
 cd /d "%~dp0\run"
-call start_admin.cmd
+call start.cmd
