@@ -2,11 +2,12 @@
 schema_version = 1
 
 [engine]
-dry_run = true
+dry_run = false
 max_flows = 4096
 flow_idle_seconds = 30
 max_initial_bytes = 16384
 max_packets_per_flow = 4
+
 
 [targets.youtube]
 enabled = true
@@ -58,13 +59,14 @@ exclude_ips_file = "exclude-ips.txt"
 unknown_action = "pass-through"
 
 [strategy]
-name = "pass-through"
+name = "split-tcp"
 
 [strategies.pass-through]
 enabled = true
 
 [strategies.split-tcp]
-enabled = false
+enabled = true
+
 
 [strategies.split-tls]
 enabled = false

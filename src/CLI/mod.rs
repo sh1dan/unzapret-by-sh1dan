@@ -72,7 +72,7 @@ fn run_engine(dry_run: bool) -> (u8, String) {
         Err(e) => return (1, format!("Ctrl+C handler install failed: {e}")),
     };
 
-    eprintln!("Phase 4 engine started.");
+    eprintln!("unzapret-by-sh1dan engine started.");
     eprintln!("  Mode:     {mode_label}");
     eprintln!("  Strategy: {}", loaded.strategy);
     eprintln!("  Targets:  {} IP(s), {} TCP port(s), {} UDP port(s)",

@@ -79,8 +79,12 @@ impl super::DestinationFilter for FilterEngine {
                     }
                 }
                 // Domain exclusions are configured but we can't see the SNI →
-                // we cannot guarantee the exclusion, so block modification.
-                None => return FilterDecision::Unknown,
+                // for TCP we cannot guarantee the exclusion, so block modification.
+                None => {
+                    if ctx.transport == Transport::Tcp {
+                        return FilterDecision::Unknown;
+                    }
+                }
             }
         }
 
