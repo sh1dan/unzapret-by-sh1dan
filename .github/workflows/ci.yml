@@ -13,26 +13,30 @@ permissions:
 
 jobs:
   test:
-    name: Tests (${{ matrix.os }})
-    strategy:
-      matrix:
-        os: [windows-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    name: Windows Tests & Smoke Check
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build offline (no third-party crates)
-        run: cargo build --offline --all-targets
-      - name: Contract tests (main crate)
-        run: cargo test --offline
-      - name: Contract tests (windivert-adapter crate)
-        run: cargo test -p windivert-adapter --offline
-      - name: CLI smoke test
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo Build
+        run: cargo build --all-targets
+
+      - name: Unit and Contract Tests
+        run: cargo test
+
+      - name: WinDivert Adapter Tests
+        run: cargo test -p windivert-adapter
+
+      - name: CLI Smoke Tests
         run: |
-          cargo run --offline -- status
-          cargo run --offline -- test --mock
-          cargo run --offline -- service status
-          cargo run --offline -- diagnose
-          cargo run --offline -- logs
+          cargo run -- status
+          cargo run -- test --mock
+          cargo run -- service status
+          cargo run -- diagnose
+          cargo run -- logs
 
   release:
     name: Build & Publish Release
@@ -41,23 +45,35 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Build Release Binary
-        run: cargo build --release --offline
+        run: cargo build --release
+
       - name: Update Run Package Binary
         shell: pwsh
-        run: Copy-Item target/release/dpi-bypass.exe run/dpi-bypass.exe -Force
+        run: |
+          Copy-Item target/release/dpi-bypass.exe run/dpi-bypass.exe -Force
+          Get-Item run/dpi-bypass.exe
+
       - name: Create Release Zip Package
         shell: pwsh
         run: |
-          $zipName = "unzapret-by-sh1dan-${{ github.ref_name }}-windows-x64.zip"
+          $tag = "${{ github.ref_name }}"
+          $zipName = "unzapret-by-sh1dan-$tag-windows-x64.zip"
           Compress-Archive -Path run/* -DestinationPath $zipName -Force
           Get-Item $zipName
-      - name: Upload Release Asset
+
+      - name: Upload GitHub Release Asset
         uses: softprops/action-gh-release@v2
         with:
           files: unzapret-by-sh1dan-*.zip
           name: Release ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
           draft: false
           prerelease: false
           generate_release_notes: true
+
 
