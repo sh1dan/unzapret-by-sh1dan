@@ -1,12 +1,20 @@
 use crate::core::{PacketContext, RunMode};
 use crate::filtering::FilterDecision;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FakeUdpType {
+    DiscordVoice,
+    Quic,
+}
+
 /// Plans are validated by the engine; strategies never send packets themselves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProcessResult {
     PassThrough,
     /// TCP payload offset, not an IP packet or TLS-record offset.
     SplitTcp { payload_offset: usize },
+    /// Fake UDP desync packet injection (Discord Voice STUN, QUIC, etc.)
+    FakeUdp { payload_type: FakeUdpType, repeats: usize },
     WouldModify,
 }
 
@@ -18,6 +26,9 @@ pub trait Strategy: Send + Sync {
 
 pub mod split_tcp;
 pub use split_tcp::SplitTcp;
+
+pub mod auto;
+pub use auto::AutoBypass;
 
 pub struct PassThrough;
 

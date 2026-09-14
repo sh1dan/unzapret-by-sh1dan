@@ -245,8 +245,9 @@ fn run_engine_as_service(stop_flag: &AtomicBool) -> Result<(), String> {
     };
 
     let strategy_impl: Box<dyn crate::strategies::Strategy> = match loaded.strategy.as_str() {
-        "split-tcp" => Box::new(crate::strategies::SplitTcp::default()),
-        _ => Box::new(crate::strategies::PassThrough),
+        "pass-through" => Box::new(crate::strategies::PassThrough),
+        "split-tcp-only" => Box::new(crate::strategies::SplitTcp::default()),
+        _ => Box::new(crate::strategies::AutoBypass::default()),
     };
 
     let flow_table = crate::core::flow::FlowTable::new(

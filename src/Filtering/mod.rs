@@ -2,7 +2,7 @@ use crate::core::PacketContext;
 
 pub mod list;
 pub mod engine;
-pub use engine::FilterEngine;
+pub use engine::{FilterEngine, TargetPreset};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FilterDecision { Allow, Exclude, NoMatch, Unknown }

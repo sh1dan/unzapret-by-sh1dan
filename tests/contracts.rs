@@ -805,6 +805,55 @@ fn pipeline_discord_voice_stun_recognized_and_media_unchanged() {
     assert_eq!(sent_list[1], rtp_pkt, "RTP voice media passed through intact (media unchanged guarantee)");
 }
 
+#[test]
+fn pipeline_auto_bypass_injects_fake_udp_for_discord_voice_stun() {
+    use local_dpi_bypass::core::pipeline::PassThroughEngine;
+    use local_dpi_bypass::core::PacketEngine as _;
+    use local_dpi_bypass::filtering::{FilterEngine, TargetPreset};
+    use local_dpi_bypass::core::flow::FlowTable;
+    use local_dpi_bypass::strategies::AutoBypass;
+
+    let rtc_ip = std::net::Ipv4Addr::new(162, 159, 138, 232);
+    let rtc_port = 50001;
+
+    let stun_payload = local_dpi_bypass::core::stun::build_test_stun_binding_request();
+    let stun_pkt = udp_packet_with_payload(rtc_ip, rtc_port, &stun_payload);
+
+    let sent = Rc::new(RefCell::new(Vec::new()));
+    let events = vec![
+        Ok(ReceiveEvent::Packet(CapturedPacket { bytes: stun_pkt.clone(), address: () })),
+        Ok(ReceiveEvent::End),
+    ];
+    let capture = RecordingCapture::new(RunMode::Active, events, Rc::clone(&sent));
+
+    // Preset matching Discord voice UDP ports
+    let voice_preset = TargetPreset {
+        allow_domains: vec![],
+        allow_ips: vec![],
+        tcp_ports: vec![],
+        udp_ports: vec![rtc_port],
+    };
+    let filter_engine = FilterEngine::new(vec![], vec![], vec![voice_preset]);
+    let mut engine = PassThroughEngine::new(
+        capture, filter_engine, FlowTable::with_defaults(), Box::new(AutoBypass::default()), |_| {},
+    );
+    let stop = AtomicBool::new(true);
+    let counters = engine.run(RunMode::Active, &stop).unwrap();
+
+    assert_eq!(counters.processed, 1);
+    assert_eq!(counters.modified, 1, "STUN packet must be desynced with fake UDP");
+    // 6 fake packets + 1 real packet = 7 reinserted
+    assert_eq!(counters.reinserted, 7, "repeats=6 fake UDP + 1 real packet");
+
+    let sent_list = sent.borrow();
+    assert_eq!(sent_list.len(), 7);
+    // The final packet sent must be the real unmodified STUN packet
+    assert_eq!(sent_list[6], stun_pkt);
+    // The first 6 packets must be valid fake UDP packets
+    assert_eq!(sent_list[0].len(), 20 + 8 + 1200);
+}
+
+
 // ── Phase 7: Sequential Strategy Tester contracts ────────────────────────────
 
 use local_dpi_bypass::core::tester::{

@@ -80,14 +80,15 @@ fn run_engine(dry_run: bool) -> (u8, String) {
     eprintln!("unzapret-by-sh1dan engine started.");
     eprintln!("  Mode:     {mode_label}");
     eprintln!("  Strategy: {}", loaded.strategy);
-    eprintln!("  Filter:   Active presets (YouTube, Discord, Twitch, Telegram)");
+    eprintln!("  Filter:   Active presets (YouTube, Discord, Voice/STUN, Twitch, Telegram)");
     eprintln!("  Max flows: {}, idle {}s, initial pkts: {}",
         loaded.max_flows, loaded.flow_idle_seconds, loaded.max_packets_per_flow);
     eprintln!("Press Ctrl+C to stop.");
 
     let strategy_impl: Box<dyn crate::strategies::Strategy> = match loaded.strategy.as_str() {
-        "split-tcp" => Box::new(crate::strategies::SplitTcp::default()),
-        _ => Box::new(crate::strategies::PassThrough),
+        "pass-through" => Box::new(crate::strategies::PassThrough),
+        "split-tcp-only" => Box::new(crate::strategies::SplitTcp::default()),
+        _ => Box::new(crate::strategies::AutoBypass::default()),
     };
 
     let flow_table = crate::core::flow::FlowTable::new(

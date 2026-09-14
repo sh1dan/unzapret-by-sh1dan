@@ -7,7 +7,7 @@
 //!   - IPv4/IPv6 total lengths and checksums are recomputed and valid.
 
 use std::net::IpAddr;
-use super::checksum::{ipv4_header_checksum, tcp_checksum};
+use super::checksum::{ipv4_header_checksum, tcp_checksum, udp_checksum};
 use super::parser::{parse, TransportMetadata};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -147,6 +147,66 @@ fn build_tcp_segment(
     packet
 }
 
+/// Constructs a valid fake UDP packet with identical IP/UDP source/dest endpoints
+/// but replaced fake payload and updated lengths and checksums.
+pub fn create_fake_udp_packet(
+    original_packet: &[u8],
+    fake_payload: &[u8],
+) -> Result<Vec<u8>, SegmentError> {
+    let meta = parse(original_packet).map_err(|e| match e {
+        super::parser::ParseError::Malformed => SegmentError::MalformedPacket,
+        super::parser::ParseError::Unsupported => SegmentError::UnsupportedProtocol,
+    })?;
+
+    if !matches!(meta.transport, TransportMetadata::Udp { .. }) {
+        return Err(SegmentError::UnsupportedProtocol);
+    }
+
+    let (src_ip, dst_ip, ip_hdr_len) = (meta.source, meta.destination, meta.header_length);
+    let udp_hdr_start = ip_hdr_len;
+    let udp_hdr_end = udp_hdr_start + 8;
+    if udp_hdr_end > original_packet.len() {
+        return Err(SegmentError::MalformedPacket);
+    }
+
+    let udp_len = 8 + fake_payload.len();
+    let total_len = ip_hdr_len + udp_len;
+    let mut packet = vec![0u8; total_len];
+
+    // Copy original IP header
+    packet[..ip_hdr_len].copy_from_slice(&original_packet[..ip_hdr_len]);
+    // Copy original UDP ports (bytes 0..4 of UDP header: src_port, dst_port)
+    packet[udp_hdr_start..udp_hdr_start + 4].copy_from_slice(&original_packet[udp_hdr_start..udp_hdr_start + 4]);
+    // Set new UDP length (bytes 4..6 of UDP header)
+    packet[udp_hdr_start + 4..udp_hdr_start + 6].copy_from_slice(&(udp_len as u16).to_be_bytes());
+    // Zero UDP checksum placeholder (bytes 6..8 of UDP header)
+    packet[udp_hdr_start + 6..udp_hdr_start + 8].copy_from_slice(&[0, 0]);
+    // Copy fake payload
+    packet[udp_hdr_end..].copy_from_slice(fake_payload);
+
+    // Update IP header lengths and checksums
+    match meta.version {
+        4 => {
+            packet[2..4].copy_from_slice(&(total_len as u16).to_be_bytes());
+            packet[10..12].copy_from_slice(&[0, 0]);
+            let ip_csum = ipv4_header_checksum(&packet[..ip_hdr_len]);
+            packet[10..12].copy_from_slice(&ip_csum.to_be_bytes());
+        }
+        6 => {
+            packet[4..6].copy_from_slice(&(udp_len as u16).to_be_bytes());
+        }
+        _ => return Err(SegmentError::UnsupportedProtocol),
+    }
+
+    // Recompute UDP checksum
+    let udp_csum = udp_checksum(src_ip, dst_ip, &packet[udp_hdr_start..]);
+    let csum_bytes = if udp_csum == 0 { [0xff, 0xff] } else { udp_csum.to_be_bytes() };
+    packet[udp_hdr_start + 6..udp_hdr_start + 8].copy_from_slice(&csum_bytes);
+
+    Ok(packet)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,4 +279,50 @@ mod tests {
         assert_eq!(seq1, 100_000);
         assert_eq!(seq2, 100_000 + split_offset as u32);
     }
+
+    #[test]
+    fn create_fake_udp_packet_preserves_endpoints_and_updates_checksum() {
+        let src = Ipv4Addr::new(192, 168, 1, 100);
+        let dst = Ipv4Addr::new(162, 159, 138, 232);
+        let orig_payload = b"real-stun-packet";
+        let fake_payload = b"fake-udp-payload-1200-bytes";
+
+        let total_len = 20 + 8 + orig_payload.len();
+        let mut orig_pkt = vec![0u8; total_len];
+        orig_pkt[0] = 0x45;
+        orig_pkt[2..4].copy_from_slice(&(total_len as u16).to_be_bytes());
+        orig_pkt[8] = 64;
+        orig_pkt[9] = 17; // UDP
+        orig_pkt[12..16].copy_from_slice(&src.octets());
+        orig_pkt[16..20].copy_from_slice(&dst.octets());
+        let ip_csum = ipv4_header_checksum(&orig_pkt[..20]);
+        orig_pkt[10..12].copy_from_slice(&ip_csum.to_be_bytes());
+        orig_pkt[20..22].copy_from_slice(&50000u16.to_be_bytes());
+        orig_pkt[22..24].copy_from_slice(&50001u16.to_be_bytes());
+        orig_pkt[24..26].copy_from_slice(&((8 + orig_payload.len()) as u16).to_be_bytes());
+        orig_pkt[28..].copy_from_slice(orig_payload);
+
+        let fake_pkt = create_fake_udp_packet(&orig_pkt, fake_payload).expect("should succeed");
+        assert_eq!(fake_pkt.len(), 20 + 8 + fake_payload.len());
+        // Verify payload replaced
+        assert_eq!(&fake_pkt[28..], fake_payload);
+        // Verify endpoints preserved
+        assert_eq!(&fake_pkt[12..16], &src.octets());
+        assert_eq!(&fake_pkt[16..20], &dst.octets());
+        assert_eq!(&fake_pkt[20..22], &50000u16.to_be_bytes());
+        assert_eq!(&fake_pkt[22..24], &50001u16.to_be_bytes());
+        // Verify valid IP checksum
+        assert_eq!(crate::core::checksum::internet_checksum(&fake_pkt[..20]), 0x0000);
+        // Verify valid UDP checksum
+        let mut pseudo = Vec::new();
+        pseudo.extend_from_slice(&src.octets());
+        pseudo.extend_from_slice(&dst.octets());
+        pseudo.push(0);
+        pseudo.push(17);
+        pseudo.extend_from_slice(&((8 + fake_payload.len()) as u16).to_be_bytes());
+        pseudo.extend_from_slice(&fake_pkt[20..]);
+        assert_eq!(crate::core::checksum::internet_checksum(&pseudo), 0x0000);
+    }
 }
+
+

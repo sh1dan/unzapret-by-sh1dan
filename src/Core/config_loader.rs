@@ -73,8 +73,8 @@ pub fn load_config(config_root: &Path) -> Result<LoadedConfig, CaptureError> {
     // ── [strategy] ───────────────────────────────────────────────────────────
     let strategy_table = root.get("strategy").and_then(|v| v.as_table()).ok_or_else(cfg_err)?;
     let strategy_name = strategy_table.get("name").and_then(|v| v.as_str()).ok_or_else(cfg_err)?;
-    // Supported strategies in Phase 4: pass-through, split-tcp
-    let known_strategies = ["pass-through", "split-tcp"];
+    // Supported strategies: pass-through, split-tcp, auto
+    let known_strategies = ["pass-through", "split-tcp", "auto"];
     if !known_strategies.contains(&strategy_name) {
         eprintln!("config: unknown/unimplemented strategy '{strategy_name}'");
         return Err(cfg_err());

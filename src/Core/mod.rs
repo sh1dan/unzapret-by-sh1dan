@@ -14,6 +14,7 @@ pub mod tls;
 pub mod quic;
 pub mod stun;
 pub mod tester;
+pub mod payloads;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Transport { Tcp, Udp }

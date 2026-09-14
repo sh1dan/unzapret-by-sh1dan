@@ -124,6 +124,85 @@ pub fn tcp_checksum(
     }
 }
 
+/// Computes the UDP checksum over IPv4 pseudo-header, UDP header, and payload.
+/// `udp_segment` contains `udp_header + payload` with checksum field zeroed.
+pub fn udp_checksum_ipv4(
+    src: Ipv4Addr,
+    dst: Ipv4Addr,
+    udp_segment: &[u8],
+) -> u16 {
+    let mut sum: u32 = 0;
+    for chunk in src.octets().chunks_exact(2) {
+        sum += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+    }
+    for chunk in dst.octets().chunks_exact(2) {
+        sum += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+    }
+    // Protocol UDP (17)
+    sum += 17u32;
+    // UDP length
+    sum += udp_segment.len() as u32;
+
+    let mut chunks = udp_segment.chunks_exact(2);
+    for chunk in &mut chunks {
+        sum += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+    }
+    let remainder = chunks.remainder();
+    if let Some(&last_byte) = remainder.first() {
+        sum += u32::from(u16::from_be_bytes([last_byte, 0]));
+    }
+
+    let csum = fold_sum(sum);
+    if csum == 0 { 0xffff } else { csum }
+}
+
+/// Computes the UDP checksum over IPv6 pseudo-header, UDP header, and payload.
+/// `udp_segment` contains `udp_header + payload` with checksum field zeroed.
+pub fn udp_checksum_ipv6(
+    src: Ipv6Addr,
+    dst: Ipv6Addr,
+    udp_segment: &[u8],
+) -> u16 {
+    let mut sum: u32 = 0;
+    for chunk in src.octets().chunks_exact(2) {
+        sum += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+    }
+    for chunk in dst.octets().chunks_exact(2) {
+        sum += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+    }
+    let len = udp_segment.len() as u32;
+    sum += len >> 16;
+    sum += len & 0xffff;
+    // Next Header UDP (17)
+    sum += 17u32;
+
+    let mut chunks = udp_segment.chunks_exact(2);
+    for chunk in &mut chunks {
+        sum += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+    }
+    let remainder = chunks.remainder();
+    if let Some(&last_byte) = remainder.first() {
+        sum += u32::from(u16::from_be_bytes([last_byte, 0]));
+    }
+
+    let csum = fold_sum(sum);
+    if csum == 0 { 0xffff } else { csum }
+}
+
+/// Convenience wrapper for either IPv4 or IPv6 UDP checksum calculation.
+pub fn udp_checksum(
+    src: IpAddr,
+    dst: IpAddr,
+    udp_segment: &[u8],
+) -> u16 {
+    match (src, dst) {
+        (IpAddr::V4(s), IpAddr::V4(d)) => udp_checksum_ipv4(s, d, udp_segment),
+        (IpAddr::V6(s), IpAddr::V6(d)) => udp_checksum_ipv6(s, d, udp_segment),
+        _ => 0,
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,4 +271,28 @@ mod tests {
         pseudo.extend_from_slice(&tcp_seg);
         assert_eq!(internet_checksum(&pseudo), 0x0000);
     }
+
+    #[test]
+    fn udp_checksum_ipv4_vector() {
+        let src = Ipv4Addr::new(192, 168, 1, 100);
+        let dst = Ipv4Addr::new(192, 168, 1, 1);
+        let mut udp_seg = vec![
+            0xc3, 0x50, 0x00, 0x35, // src port 50000, dst port 53
+            0x00, 0x0c, 0x00, 0x00, // length 12, checksum 0
+            0xde, 0xad, 0xbe, 0xef, // payload 4 bytes
+        ];
+        let csum = udp_checksum_ipv4(src, dst, &udp_seg);
+        assert_ne!(csum, 0);
+
+        udp_seg[6..8].copy_from_slice(&csum.to_be_bytes());
+        let mut pseudo = Vec::new();
+        pseudo.extend_from_slice(&src.octets());
+        pseudo.extend_from_slice(&dst.octets());
+        pseudo.push(0);
+        pseudo.push(17);
+        pseudo.extend_from_slice(&(udp_seg.len() as u16).to_be_bytes());
+        pseudo.extend_from_slice(&udp_seg);
+        assert_eq!(internet_checksum(&pseudo), 0x0000);
+    }
 }
+

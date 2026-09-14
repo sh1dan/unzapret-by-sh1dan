@@ -212,9 +212,46 @@ impl<C: PacketCapture> ActivePipelineEngine<C> {
                         }
                     }
                 }
+                ProcessResult::FakeUdp { payload_type, repeats } => {
+                    let fake_payload = match payload_type {
+                        crate::strategies::FakeUdpType::DiscordVoice => super::payloads::DISCORD_VOICE_UDP_FAKE,
+                        crate::strategies::FakeUdpType::Quic => super::payloads::GOOGLE_QUIC_UDP_FAKE,
+                    };
+
+                    match super::segment::create_fake_udp_packet(&packet.bytes, fake_payload) {
+                        Ok(fake_bytes) => {
+                            self.counters.modified += 1;
+                            let fake_pkt = CapturedPacket {
+                                bytes: fake_bytes,
+                                address: packet.address.clone(),
+                            };
+                            for _ in 0..repeats {
+                                if let Err(error) = self.capture.send(&fake_pkt) {
+                                    self.counters.send_errors += 1;
+                                    self.counters.errors += 1;
+                                    self.counters.dropped += 1;
+                                    return Err(EngineError::Capture(error));
+                                }
+                                self.counters.reinserted += 1;
+                            }
+                            // Reinsert the genuine packet
+                            if let Err(error) = self.capture.send(&packet) {
+                                self.counters.send_errors += 1;
+                                self.counters.errors += 1;
+                                self.counters.dropped += 1;
+                                return Err(EngineError::Capture(error));
+                            }
+                            self.counters.reinserted += 1;
+                        }
+                        Err(_) => {
+                            self.reinject_unmodified(mode, &packet)?;
+                        }
+                    }
+                }
             }
         }
     }
+
 
     fn reinject_unmodified(&mut self, mode: RunMode, packet: &CapturedPacket<C::Address>) -> Result<(), EngineError> {
         if mode == RunMode::Active {

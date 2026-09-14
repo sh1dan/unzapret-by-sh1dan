@@ -44,12 +44,57 @@ impl TargetPreset {
         self.port_matches(ctx)
             && self.allow_domains.iter().any(|e| e.matches(&sni_lower))
     }
+
+    /// Evaluates if context is allowed by this preset.
+    pub fn is_allowed(&self, ctx: &PacketContext<'_>) -> bool {
+        if !self.port_matches(ctx) {
+            return false;
+        }
+        if self.domain_allow(ctx) {
+            return true;
+        }
+        if self.ip_allow(ctx) {
+            return true;
+        }
+        // Dedicated UDP port profile with dynamic endpoints (e.g. Discord Voice RTC)
+        if ctx.transport == Transport::Udp && self.allow_domains.is_empty() && self.allow_ips.is_empty() && !self.udp_ports.is_empty() {
+            return true;
+        }
+        // Explicit STUN signaling packet on preset port
+        if ctx.transport == Transport::Udp && ctx.initial == crate::core::InitialMetadata::Stun {
+            return true;
+        }
+        false
+    }
 }
 
 pub struct FilterEngine {
     pub exclude_ips:     Vec<IpEntry>,
     pub exclude_domains: Vec<DomainEntry>,
     pub presets:         Vec<TargetPreset>,
+}
+
+fn format_port_clauses(proto: &str, ports: &std::collections::BTreeSet<u16>) -> Vec<String> {
+    if ports.is_empty() {
+        return Vec::new();
+    }
+    let mut ranges: Vec<(u16, u16)> = Vec::new();
+    for &port in ports {
+        if let Some(last) = ranges.last_mut() {
+            if last.1 + 1 == port {
+                last.1 = port;
+                continue;
+            }
+        }
+        ranges.push((port, port));
+    }
+    ranges.into_iter().map(|(start, end)| {
+        if start == end {
+            format!("{proto}.DstPort == {start}")
+        } else {
+            format!("({proto}.DstPort >= {start} and {proto}.DstPort <= {end})")
+        }
+    }).collect()
 }
 
 impl FilterEngine {
@@ -85,12 +130,12 @@ impl FilterEngine {
         }
 
         let mut transport_clauses = Vec::new();
-        if !tcp_ports.is_empty() {
-            let tcp_clauses: Vec<_> = tcp_ports.iter().map(|p| format!("tcp.DstPort == {p}")).collect();
+        let tcp_clauses = format_port_clauses("tcp", &tcp_ports);
+        if !tcp_clauses.is_empty() {
             transport_clauses.push(format!("(tcp and ({}))", tcp_clauses.join(" or ")));
         }
-        if !udp_ports.is_empty() {
-            let udp_clauses: Vec<_> = udp_ports.iter().map(|p| format!("udp.DstPort == {p}")).collect();
+        let udp_clauses = format_port_clauses("udp", &udp_ports);
+        if !udp_clauses.is_empty() {
             transport_clauses.push(format!("(udp and ({}))", udp_clauses.join(" or ")));
         }
 
@@ -126,7 +171,7 @@ impl super::DestinationFilter for FilterEngine {
 
         // Steps 5+6: check each enabled preset.
         for preset in &self.presets {
-            if preset.ip_allow(ctx) || preset.domain_allow(ctx) {
+            if preset.is_allowed(ctx) {
                 return FilterDecision::Allow;
             }
         }
@@ -134,6 +179,7 @@ impl super::DestinationFilter for FilterEngine {
         FilterDecision::NoMatch
     }
 }
+
 
 #[cfg(test)]
 mod tests {
