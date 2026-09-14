@@ -66,17 +66,31 @@ jobs:
           Compress-Archive -Path run/* -DestinationPath $zipName -Force
           Get-Item $zipName
 
+      - name: Clean up obsolete release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $headers = @{ "Authorization" = "token $env:GH_TOKEN"; "User-Agent" = "PowerShell" }
+          $rel = try { Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" -Headers $headers } catch { $null }
+          if ($rel -and $rel.assets) {
+              foreach ($a in $rel.assets) {
+                  if ($a.name -eq "SHA256SUMS.txt") {
+                      Invoke-RestMethod -Uri $a.url -Method Delete -Headers $headers
+                  }
+              }
+          }
+
       - name: Upload GitHub Release Asset
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            unzapret-by-sh1dan-*.zip
-            run/SHA256SUMS.txt
-          name: ${{ github.ref_name }}
+          files: unzapret-by-sh1dan-*.zip
+          name: 1.0.0
           tag_name: ${{ github.ref_name }}
           body_path: .github/release-notes.md
           draft: false
           prerelease: false
+
 
 
 
