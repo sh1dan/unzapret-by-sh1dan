@@ -52,19 +52,24 @@ fn run_engine(dry_run: bool) -> (u8, String) {
     let mode = if effective_dry_run { RunMode::DryRun } else { RunMode::Active };
     let mode_label = if effective_dry_run { "dry-run (sniff)" } else { "active (capture+reinject)" };
 
-    // ── Load Phase 2 capture config (explicit test IPs/ports) ────────────────
-    let (p2_config, _raw) = match Phase2Config::load() {
-        Ok(v) => v,
-        Err(e) => return (1, format!("Phase 2 capture config error: {e}")),
-    };
-    if !p2_config.enabled {
-        return (1, "Phase 2 capture is disabled in config/phase2.toml. \
-            Set enabled = true and provide destination_ips/ports.".into());
-    }
+    // ── Load Phase 2 capture config (validation & fallback) ────────────────
+    let p2_config = Phase2Config::load().map(|(c, _)| c).ok();
 
-    let capture = match WinDivertCapture::open(&p2_config, mode) {
+    // Use dynamic WinDivert filter based on all active presets (or fallback to p2_config)
+    let dynamic_filter = loaded.filter_engine.build_windivert_filter();
+    let capture = match WinDivertCapture::open_filter(&dynamic_filter, mode) {
         Ok(c) => c,
-        Err(e) => return (1, format!("Capture open failed: {e}")),
+        Err(_) => {
+            // Fallback to phase2.toml if dynamic open fails
+            if let Some(ref p2) = p2_config {
+                match WinDivertCapture::open(p2, mode) {
+                    Ok(c) => c,
+                    Err(e) => return (1, format!("Capture open failed: {e}")),
+                }
+            } else {
+                return (1, "Capture open failed: unable to initialize WinDivert driver".into());
+            }
+        }
     };
 
     let mut stop_handler = match windivert_adapter::ConsoleStop::install() {
@@ -75,8 +80,7 @@ fn run_engine(dry_run: bool) -> (u8, String) {
     eprintln!("unzapret-by-sh1dan engine started.");
     eprintln!("  Mode:     {mode_label}");
     eprintln!("  Strategy: {}", loaded.strategy);
-    eprintln!("  Targets:  {} IP(s), {} TCP port(s), {} UDP port(s)",
-        p2_config.destination_ips.len(), p2_config.tcp_ports.len(), p2_config.udp_ports.len());
+    eprintln!("  Filter:   Active presets (YouTube, Discord, Twitch, Telegram)");
     eprintln!("  Max flows: {}, idle {}s, initial pkts: {}",
         loaded.max_flows, loaded.flow_idle_seconds, loaded.max_packets_per_flow);
     eprintln!("Press Ctrl+C to stop.");

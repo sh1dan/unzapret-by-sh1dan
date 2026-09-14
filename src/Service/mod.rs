@@ -229,15 +229,20 @@ fn run_engine_as_service(stop_flag: &AtomicBool) -> Result<(), String> {
 
     let mode = if loaded.dry_run { RunMode::DryRun } else { RunMode::Active };
 
-    let (p2_config, _raw) = Phase2Config::load()
-        .map_err(|e| format!("Phase 2 capture config error: {e}"))?;
+    let p2_config = Phase2Config::load().map(|(c, _)| c).ok();
 
-    if !p2_config.enabled {
-        return Err("Phase 2 capture is disabled in config/phase2.toml".into());
-    }
-
-    let capture = WinDivertCapture::open(&p2_config, mode)
-        .map_err(|e| format!("Capture open failed: {e}"))?;
+    let dynamic_filter = loaded.filter_engine.build_windivert_filter();
+    let capture = match WinDivertCapture::open_filter(&dynamic_filter, mode) {
+        Ok(c) => c,
+        Err(_) => {
+            if let Some(ref p2) = p2_config {
+                WinDivertCapture::open(p2, mode)
+                    .map_err(|e| format!("Capture open failed: {e}"))?
+            } else {
+                return Err("Capture open failed: unable to initialize WinDivert driver".into());
+            }
+        }
+    };
 
     let strategy_impl: Box<dyn crate::strategies::Strategy> = match loaded.strategy.as_str() {
         "split-tcp" => Box::new(crate::strategies::SplitTcp::default()),

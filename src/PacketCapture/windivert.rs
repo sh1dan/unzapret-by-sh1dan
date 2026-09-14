@@ -10,11 +10,15 @@ pub struct WinDivertCapture {
 impl WinDivertCapture {
     pub fn open(config: &Phase2Config, mode: RunMode) -> Result<Self, CaptureError> {
         let filter = config.filter()?;
+        Self::open_filter(&filter, mode)
+    }
+
+    pub fn open_filter(filter: &str, mode: RunMode) -> Result<Self, CaptureError> {
         let native_mode = match mode {
             RunMode::Active => Mode::Active,
             RunMode::DryRun => Mode::Sniff,
         };
-        Ok(Self { inner: Capture::open(&filter, native_mode)?, mode })
+        Ok(Self { inner: Capture::open(filter, native_mode)?, mode })
     }
 }
 

@@ -60,6 +60,42 @@ impl FilterEngine {
     ) -> Self {
         Self { exclude_ips, exclude_domains, presets }
     }
+
+    pub fn build_windivert_filter(&self) -> String {
+        use std::collections::BTreeSet;
+        let mut tcp_ports: BTreeSet<u16> = BTreeSet::new();
+        let mut udp_ports: BTreeSet<u16> = BTreeSet::new();
+
+        for p in &self.presets {
+            for port in &p.tcp_ports {
+                tcp_ports.insert(*port);
+            }
+            for port in &p.udp_ports {
+                udp_ports.insert(*port);
+            }
+        }
+
+        // Fallback default ports if no targets enabled
+        if tcp_ports.is_empty() {
+            tcp_ports.insert(80);
+            tcp_ports.insert(443);
+        }
+        if udp_ports.is_empty() {
+            udp_ports.insert(443);
+        }
+
+        let mut transport_clauses = Vec::new();
+        if !tcp_ports.is_empty() {
+            let tcp_clauses: Vec<_> = tcp_ports.iter().map(|p| format!("tcp.DstPort == {p}")).collect();
+            transport_clauses.push(format!("(tcp and ({}))", tcp_clauses.join(" or ")));
+        }
+        if !udp_ports.is_empty() {
+            let udp_clauses: Vec<_> = udp_ports.iter().map(|p| format!("udp.DstPort == {p}")).collect();
+            transport_clauses.push(format!("(udp and ({}))", udp_clauses.join(" or ")));
+        }
+
+        format!("outbound and !loopback and !impostor and ({})", transport_clauses.join(" or "))
+    }
 }
 
 impl super::DestinationFilter for FilterEngine {
