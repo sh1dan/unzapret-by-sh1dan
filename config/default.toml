@@ -19,7 +19,7 @@ udp_ports = [443]
 enabled = true
 domains_file = "presets/discord/domains.txt"
 ips_file = "ips.txt"
-tcp_ports = [443]
+tcp_ports = [443, 2053, 2083, 2087, 2096, 8443]
 udp_ports = []
 
 [targets.twitch]
@@ -42,7 +42,8 @@ enabled = true
 domains_file = "presets/discord-voice/domains.txt"
 ips_file = "presets/discord-voice/ips.txt"
 tcp_ports = []
-udp_ports = [50001, 50002, 50003, 50004, 50005]
+udp_ports = [19294, 19295, 19296, 19297, 19298, 19299, 19300, 19301, 19302, 19303, 19304, 19305, 50001, 50002, 50003, 50004, 50005, 50006, 50007, 50008, 50009, 50010]
+
 
 [targets.custom]
 enabled = false

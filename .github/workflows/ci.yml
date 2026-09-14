@@ -85,11 +85,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: unzapret-by-sh1dan-*.zip
-          name: 1.0.0
+          name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
           body_path: .github/release-notes.md
           draft: false
           prerelease: false
+
 
 
 
