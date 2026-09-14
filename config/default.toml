@@ -1,0 +1,89 @@
+# Phase 1 schema proposal. No runtime TOML loader exists yet.
+schema_version = 1
+
+[engine]
+dry_run = true
+max_flows = 4096
+flow_idle_seconds = 30
+max_initial_bytes = 16384
+max_packets_per_flow = 4
+
+[targets.youtube]
+enabled = true
+domains_file = "presets/youtube/domains.txt"
+ips_file = "ips.txt"
+tcp_ports = [443]
+udp_ports = [443]
+
+[targets.discord]
+enabled = true
+domains_file = "presets/discord/domains.txt"
+ips_file = "ips.txt"
+tcp_ports = [443]
+udp_ports = []
+
+[targets.twitch]
+enabled = true
+domains_file = "presets/twitch/domains.txt"
+ips_file = "ips.txt"
+tcp_ports = [443]
+udp_ports = []
+
+[targets.telegram]
+enabled = true
+domains_file = "presets/telegram/domains.txt"
+ips_file = "ips.txt"
+tcp_ports = [443]
+udp_ports = []
+
+[targets.discord_voice]
+# Discord Voice RTC endpoints (STUN discovery and voice signaling).
+enabled = true
+domains_file = "presets/discord-voice/domains.txt"
+ips_file = "presets/discord-voice/ips.txt"
+tcp_ports = []
+udp_ports = [50001, 50002, 50003, 50004, 50005]
+
+[targets.custom]
+enabled = false
+domains_file = "domains.txt"
+ips_file = "ips.txt"
+tcp_ports = [443]
+udp_ports = []
+
+[filters]
+exclude_domains_file = "exclude-domains.txt"
+exclude_ips_file = "exclude-ips.txt"
+unknown_action = "pass-through"
+
+[strategy]
+name = "pass-through"
+
+[strategies.pass-through]
+enabled = true
+
+[strategies.split-tcp]
+enabled = false
+
+[strategies.split-tls]
+enabled = false
+
+[strategies.reorder]
+enabled = false
+
+[strategies.decoy]
+enabled = false
+
+[strategies.quic]
+enabled = false
+
+[strategies.stun]
+enabled = false
+
+[logging]
+level = "info"
+packet_payload_logging = false
+path = "logs/app.log"
+max_bytes = 1048576
+retained_files = 3
+

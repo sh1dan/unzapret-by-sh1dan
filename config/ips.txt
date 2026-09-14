@@ -1,0 +1,2 @@
+# Explicit shared IP/CIDR allowlist. Empty by default.
+# IP grants apply only inside enabled presets and their configured ports.

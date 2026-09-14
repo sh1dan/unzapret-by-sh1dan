@@ -1,0 +1,2 @@
+# Custom preset. One exact ASCII hostname or leading-dot suffix per line.
+# Empty means no domain targets; never wildcard all destinations.

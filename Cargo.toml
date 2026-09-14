@@ -1,0 +1,29 @@
+[package]
+name = "local-dpi-bypass"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT"
+description = "Local Windows packet capture and unchanged pass-through"
+publish = false
+
+[workspace]
+members = ["crates/windivert-adapter"]
+resolver = "2"
+
+[dependencies]
+windivert-adapter = { path = "crates/windivert-adapter" }
+toml = { version = "=0.8.23", default-features = false, features = ["parse"] }
+
+[lib]
+name = "local_dpi_bypass"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dpi-bypass"
+path = "src/CLI/main.rs"
+
+[profile.release]
+overflow-checks = true
+lto = true
+codegen-units = 1

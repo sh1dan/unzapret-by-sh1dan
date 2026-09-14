@@ -1,0 +1,25 @@
+name: Phase 10 Release
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build offline (no third-party crates)
+        run: cargo build --offline --all-targets
+      - name: Contract tests (main crate)
+        run: cargo test --offline
+      - name: Contract tests (windivert-adapter crate)
+        run: cargo test -p windivert-adapter --offline
+      - name: CLI smoke test
+        run: |
+          cargo run --offline -- status
+          cargo run --offline -- test --mock
+          cargo run --offline -- service status
+          cargo run --offline -- diagnose
+          cargo run --offline -- logs

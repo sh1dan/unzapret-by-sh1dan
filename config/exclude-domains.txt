@@ -1,0 +1,1 @@
+# Global exclusions override every domain and IP grant.

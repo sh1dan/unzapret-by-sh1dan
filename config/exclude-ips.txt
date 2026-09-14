@@ -1,0 +1,1 @@
+# Global IP/CIDR exclusions override every preset and strategy.

@@ -1,0 +1,9 @@
+/target/
+*.pdb
+*.log
+*.log.*
+/logs/
+/run/logs/*
+!/run/logs/.gitkeep
+.idea/
+.vscode/
