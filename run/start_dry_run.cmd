@@ -3,17 +3,18 @@ setlocal
 cd /d "%~dp0"
 
 :: Check for administrative rights
-net session >nul 2>&1
+powershell.exe -NoProfile -Command "$p = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent()); if ($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 } else { exit 1 }" >nul 2>&1
 if %errorlevel% neq 0 (
     echo [!] Requesting administrator privileges...
-    powershell -Command "Start-Process '%~f0' -Verb RunAs"
+    set "LOCAL_DPI_LAUNCHER=%~f0"
+    powershell.exe -NoProfile -Command "Start-Process -FilePath $env:LOCAL_DPI_LAUNCHER -Verb RunAs -ErrorAction Stop"
     exit /b
 )
 
 title dpi-bypass (Dry-Run Mode - Passive Sniff)
 echo ============================================================
 echo   Starting dpi-bypass in DRY-RUN mode (sniff only, no modify)
-echo   Target IPs and ports configured in config\phase2.toml
+echo   TCP profile configured in config\default.toml
 echo   Press Ctrl+C in this console to safely stop the engine.
 echo ============================================================
 echo.

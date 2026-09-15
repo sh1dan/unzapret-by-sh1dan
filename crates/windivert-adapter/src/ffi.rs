@@ -1,6 +1,13 @@
 //! The only unsafe boundary: x86_64 Windows ABI, WinDivert 2.2 API.
 use super::*;
-use std::{ffi::{c_void, CString}, fs::{File, OpenOptions}, os::windows::{ffi::OsStrExt, fs::OpenOptionsExt}, ptr, rc::Rc, sync::atomic::{AtomicBool, Ordering}};
+use std::{
+    ffi::{c_void, CString},
+    fs::{File, OpenOptions},
+    os::windows::{ffi::OsStrExt, fs::OpenOptionsExt},
+    ptr,
+    rc::Rc,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 type Handle = *mut c_void;
 const NO_DATA: u32 = 232;
@@ -21,8 +28,26 @@ struct Overlapped {
 // WinDivert uses the C ABI, Windows APIs use system ABI. On supported x64
 // their calling conventions coincide, but the declarations remain explicit.
 type Open = unsafe extern "C" fn(*const i8, i32, i16, u64) -> Handle;
-type RecvEx = unsafe extern "C" fn(Handle, *mut c_void, u32, *mut u32, u64, *mut Address, *mut u32, *mut Overlapped) -> i32;
-type SendEx = unsafe extern "C" fn(Handle, *const c_void, u32, *mut u32, u64, *const Address, u32, *mut Overlapped) -> i32;
+type RecvEx = unsafe extern "C" fn(
+    Handle,
+    *mut c_void,
+    u32,
+    *mut u32,
+    u64,
+    *mut Address,
+    *mut u32,
+    *mut Overlapped,
+) -> i32;
+type SendEx = unsafe extern "C" fn(
+    Handle,
+    *const c_void,
+    u32,
+    *mut u32,
+    u64,
+    *const Address,
+    u32,
+    *mut Overlapped,
+) -> i32;
 type Shutdown = unsafe extern "C" fn(Handle, i32) -> i32;
 type Close = unsafe extern "C" fn(Handle) -> i32;
 type GetParam = unsafe extern "C" fn(Handle, i32, *mut u64) -> i32;
@@ -33,16 +58,32 @@ extern "system" {
     fn GetProcAddress(module: Handle, name: *const u8) -> *mut c_void;
     fn FreeLibrary(module: Handle) -> i32;
     fn GetLastError() -> u32;
-    fn CreateEventW(attributes: *const c_void, manual: i32, initial: i32, name: *const u16) -> Handle;
+    fn CreateEventW(
+        attributes: *const c_void,
+        manual: i32,
+        initial: i32,
+        name: *const u16,
+    ) -> Handle;
+    fn CreateMutexW(attributes: *const c_void, initial_owner: i32, name: *const u16) -> Handle;
     fn WaitForSingleObject(handle: Handle, milliseconds: u32) -> u32;
-    fn GetOverlappedResult(handle: Handle, overlapped: *mut Overlapped, bytes: *mut u32, wait: i32) -> i32;
+    fn GetOverlappedResult(
+        handle: Handle,
+        overlapped: *mut Overlapped,
+        bytes: *mut u32,
+        wait: i32,
+    ) -> i32;
     fn CancelIoEx(handle: Handle, overlapped: *mut Overlapped) -> i32;
     fn CloseHandle(handle: Handle) -> i32;
     fn SetConsoleCtrlHandler(handler: Option<extern "system" fn(u32) -> i32>, add: i32) -> i32;
 }
 #[link(name = "advapi32")]
 extern "system" {
-    fn CreateWellKnownSid(kind: i32, domain: *const c_void, sid: *mut c_void, bytes: *mut u32) -> i32;
+    fn CreateWellKnownSid(
+        kind: i32,
+        domain: *const c_void,
+        sid: *mut c_void,
+        bytes: *mut u32,
+    ) -> i32;
     fn CheckTokenMembership(token: Handle, sid: *const c_void, member: *mut i32) -> i32;
 }
 
@@ -50,7 +91,9 @@ fn last() -> u32 {
     // SAFETY: thread-local numeric error, no pointers or borrowed storage.
     unsafe { GetLastError() }
 }
-fn error(kind: ErrorKind) -> CaptureError { CaptureError::new(kind, Some(last())) }
+fn error(kind: ErrorKind) -> CaptureError {
+    CaptureError::new(kind, Some(last()))
+}
 
 pub fn require_administrator() -> Result<(), CaptureError> {
     let mut sid = [0u32; 17];
@@ -66,7 +109,9 @@ pub fn require_administrator() -> Result<(), CaptureError> {
             return Err(error(ErrorKind::AccessDenied));
         }
     }
-    if member == 0 { return Err(CaptureError::new(ErrorKind::AccessDenied, Some(5))); }
+    if member == 0 {
+        return Err(CaptureError::new(ErrorKind::AccessDenied, Some(5)));
+    }
     Ok(())
 }
 
@@ -99,8 +144,13 @@ impl Api {
         if dll.to_string_lossy().starts_with(r"\\?\UNC\") {
             return Err(CaptureError::new(ErrorKind::DllLoadFailed, None));
         }
-        let lock = |path: &Path| OpenOptions::new().read(true).share_mode(1).open(path)
-            .map_err(|e| CaptureError::from_io(ErrorKind::DllLoadFailed, &e));
+        let lock = |path: &Path| {
+            OpenOptions::new()
+                .read(true)
+                .share_mode(1)
+                .open(path)
+                .map_err(|e| CaptureError::from_io(ErrorKind::DllLoadFailed, &e))
+        };
         let files = [lock(&dll)?, lock(&sys)?];
         // Revalidate after opening; only fixed application-relative paths are accepted.
         if driver_files()? != (dll.clone(), sys) {
@@ -110,24 +160,32 @@ impl Api {
         // SAFETY: NUL-terminated absolute UTF-16 path lives through call; no file
         // handle supplied. DLL dependencies search SYSTEM32 only, never CWD/PATH.
         let module = unsafe { LoadLibraryExW(wide.as_ptr(), ptr::null_mut(), 0x800) };
-        if module.is_null() { return Err(error(ErrorKind::DllLoadFailed)); }
+        if module.is_null() {
+            return Err(error(ErrorKind::DllLoadFailed));
+        }
         let library = Library(module);
         macro_rules! symbol {
             ($name:literal, $ty:ty) => {{
                 // SAFETY: owned loaded module; literal is NUL-terminated. Function
                 // signature below matches the official WinDivert 2.2 header.
                 let raw = unsafe { GetProcAddress(module, concat!($name, "\0").as_ptr()) };
-                if raw.is_null() { return Err(error(ErrorKind::DllLoadFailed)); }
+                if raw.is_null() {
+                    return Err(error(ErrorKind::DllLoadFailed));
+                }
                 // SAFETY: non-null exported function, exact x64 ABI/signature;
                 // module stays alive for the lifetime of Api and all pending I/O.
                 unsafe { std::mem::transmute::<*mut c_void, $ty>(raw) }
             }};
         }
         Ok(Rc::new(Self {
-            open: symbol!("WinDivertOpen", Open), recv: symbol!("WinDivertRecvEx", RecvEx),
-            send: symbol!("WinDivertSendEx", SendEx), shutdown: symbol!("WinDivertShutdown", Shutdown),
-            close: symbol!("WinDivertClose", Close), get_param: symbol!("WinDivertGetParam", GetParam),
-            _library: library, _files: files,
+            open: symbol!("WinDivertOpen", Open),
+            recv: symbol!("WinDivertRecvEx", RecvEx),
+            send: symbol!("WinDivertSendEx", SendEx),
+            shutdown: symbol!("WinDivertShutdown", Shutdown),
+            close: symbol!("WinDivertClose", Close),
+            get_param: symbol!("WinDivertGetParam", GetParam),
+            _library: library,
+            _files: files,
         }))
     }
 }
@@ -144,9 +202,22 @@ impl Io {
     fn new(data: Vec<u8>, address: Address) -> Result<Box<Self>, CaptureError> {
         // SAFETY: unnamed manual-reset event; no borrowed attributes/name.
         let event = unsafe { CreateEventW(ptr::null(), 1, 0, ptr::null()) };
-        if event.is_null() { return Err(error(ErrorKind::Receive)); }
-        Ok(Box::new(Self { data, address, length: 0, address_length: 80,
-            overlapped: Overlapped { internal: 0, internal_high: 0, offset: 0, offset_high: 0, event } }))
+        if event.is_null() {
+            return Err(error(ErrorKind::Receive));
+        }
+        Ok(Box::new(Self {
+            data,
+            address,
+            length: 0,
+            address_length: 80,
+            overlapped: Overlapped {
+                internal: 0,
+                internal_high: 0,
+                offset: 0,
+                offset_high: 0,
+                event,
+            },
+        }))
     }
 }
 impl Drop for Io {
@@ -159,7 +230,43 @@ impl Drop for Io {
     }
 }
 
+struct InstanceGuard(Handle);
+impl InstanceGuard {
+    fn acquire(name: &str) -> Result<Self, CaptureError> {
+        let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        // SAFETY: NUL-terminated name lives through the call, no borrowed security
+        // descriptor. Handle lifetime provides exclusion; no mutex wait/ownership.
+        let handle = unsafe { CreateMutexW(ptr::null(), 0, wide.as_ptr()) };
+        let code = last();
+        if handle.is_null() {
+            return Err(CaptureError::new(
+                if code == 5 {
+                    ErrorKind::AccessDenied
+                } else {
+                    ErrorKind::DriverOpenFailed
+                },
+                Some(code),
+            ));
+        }
+        let guard = Self(handle);
+        if code == 183 {
+            drop(guard);
+            return Err(CaptureError::new(ErrorKind::AlreadyRunning, Some(code)));
+        }
+        Ok(guard)
+    }
+}
+impl Drop for InstanceGuard {
+    fn drop(&mut self) {
+        // SAFETY: sole owned reference returned by CreateMutexW; closes exactly once.
+        if unsafe { CloseHandle(self.0) } == 0 {
+            eprintln!("{}", error(ErrorKind::Shutdown));
+        }
+    }
+}
+
 pub struct Capture {
+    instance: Option<InstanceGuard>,
     api: Rc<Api>,
     handle: Handle,
     mode: Mode,
@@ -170,8 +277,12 @@ pub struct Capture {
 impl Capture {
     pub fn open(filter: &str, mode: Mode) -> Result<Self, CaptureError> {
         require_administrator()?;
-        if filter.len() > 16384 { return Err(CaptureError::new(ErrorKind::InvalidFilter, None)); }
-        let filter = CString::new(filter).map_err(|_| CaptureError::new(ErrorKind::InvalidFilter, None))?;
+        let instance = InstanceGuard::acquire(r"Global\LocalDpiBypass.PacketEngine")?;
+        if filter.len() > 16384 {
+            return Err(CaptureError::new(ErrorKind::InvalidFilter, None));
+        }
+        let filter =
+            CString::new(filter).map_err(|_| CaptureError::new(ErrorKind::InvalidFilter, None))?;
         let api = Api::load()?;
         let flags = if mode == Mode::Sniff { 0x1 | 0x4 } else { 0 };
         // SAFETY: filter is live NUL-terminated ASCII; NETWORK=0, priority=0,
@@ -179,16 +290,29 @@ impl Capture {
         let handle = unsafe { (api.open)(filter.as_ptr(), 0, 0, flags) };
         if handle as isize == -1 || handle.is_null() {
             let code = last();
-            let kind = match code { 2 | 3 => ErrorKind::DriverNotFound, 5 => ErrorKind::AccessDenied,
-                87 => ErrorKind::InvalidFilter, _ => ErrorKind::DriverOpenFailed };
+            let kind = match code {
+                2 | 3 => ErrorKind::DriverNotFound,
+                5 => ErrorKind::AccessDenied,
+                87 => ErrorKind::InvalidFilter,
+                _ => ErrorKind::DriverOpenFailed,
+            };
             return Err(CaptureError::new(kind, Some(code)));
         }
-        let mut capture = Self { api, handle, mode, pending: None, stopped: false };
+        let mut capture = Self {
+            instance: Some(instance),
+            api,
+            handle,
+            mode,
+            pending: None,
+            stopped: false,
+        };
         let mut major = 0;
         let mut minor = 0;
         // SAFETY: valid owned handle and live u64 output storage, no retention.
-        let ok = unsafe { (capture.api.get_param)(handle, 3, &mut major) != 0
-            && (capture.api.get_param)(handle, 4, &mut minor) != 0 };
+        let ok = unsafe {
+            (capture.api.get_param)(handle, 3, &mut major) != 0
+                && (capture.api.get_param)(handle, 4, &mut minor) != 0
+        };
         if !ok {
             let e = error(ErrorKind::DriverOpenFailed);
             let _ = capture.close();
@@ -206,15 +330,22 @@ impl Capture {
         let io = self.pending.as_mut().ok_or(CaptureError::new(kind, None))?;
         // SAFETY: live event associated with the sole pending operation.
         let wait = unsafe { WaitForSingleObject(io.overlapped.event, timeout) };
-        if wait == WAIT_TIMEOUT { return Ok(false); }
-        if wait != 0 { return Err(error(kind)); }
+        if wait == WAIT_TIMEOUT {
+            return Ok(false);
+        }
+        if wait != 0 {
+            return Err(error(kind));
+        }
         let mut transferred = 0;
         // SAFETY: matching handle/OVERLAPPED; Box and buffers have not moved;
         // nonblocking query after event signal. Output pointer lives through call.
-        let ok = unsafe { GetOverlappedResult(self.handle, &mut io.overlapped, &mut transferred, 0) };
+        let ok =
+            unsafe { GetOverlappedResult(self.handle, &mut io.overlapped, &mut transferred, 0) };
         if ok == 0 {
             let code = last();
-            if code == IO_INCOMPLETE { return Ok(false); }
+            if code == IO_INCOMPLETE {
+                return Ok(false);
+            }
             // Event is signalled and I/O terminal, so buffers may now be released.
             self.pending.take();
             return Err(CaptureError::new(kind, Some(code)));
@@ -229,7 +360,9 @@ impl Capture {
     }
 
     fn receive_failure(&self, error: CaptureError) -> Result<Poll, CaptureError> {
-        if error.os_code == Some(NO_DATA) && self.stopped { return Ok(Poll::End); }
+        if error.os_code == Some(NO_DATA) && self.stopped {
+            return Ok(Poll::End);
+        }
         if error.os_code == Some(122) {
             return Err(CaptureError::new(ErrorKind::InvalidPacket, error.os_code));
         }
@@ -237,18 +370,34 @@ impl Capture {
     }
 
     pub fn receive(&mut self) -> Result<Poll, CaptureError> {
-        if self.handle.is_null() { return Err(CaptureError::new(ErrorKind::Receive, None)); }
+        if self.handle.is_null() {
+            return Err(CaptureError::new(ErrorKind::Receive, None));
+        }
         let mut synchronous = false;
         if self.pending.is_none() {
             let mut io = Io::new(vec![0; MAX_PACKET], Address::default())?;
             // SAFETY: Box fields and initialized Vec allocation stay stable until
             // completion; lengths fit u32; single 80-byte address, no batching.
-            let ok = unsafe { (self.api.recv)(self.handle, io.data.as_mut_ptr().cast(), MAX_PACKET as u32,
-                &mut io.length, 0, &mut io.address, &mut io.address_length, &mut io.overlapped) };
+            let ok = unsafe {
+                (self.api.recv)(
+                    self.handle,
+                    io.data.as_mut_ptr().cast(),
+                    MAX_PACKET as u32,
+                    &mut io.length,
+                    0,
+                    &mut io.address,
+                    &mut io.address_length,
+                    &mut io.overlapped,
+                )
+            };
             if ok == 0 {
                 let e = error(ErrorKind::Receive);
-                if e.os_code != Some(IO_PENDING) { return self.receive_failure(e); }
-            } else { synchronous = true; }
+                if e.os_code != Some(IO_PENDING) {
+                    return self.receive_failure(e);
+                }
+            } else {
+                synchronous = true;
+            }
             self.pending = Some(io);
         }
         if !synchronous {
@@ -258,36 +407,64 @@ impl Capture {
                 Ok(true) => (),
             }
         }
-        let mut io = self.pending.take().ok_or(CaptureError::new(ErrorKind::Receive, None))?;
+        let mut io = self
+            .pending
+            .take()
+            .ok_or(CaptureError::new(ErrorKind::Receive, None))?;
         if io.length == 0 || io.length as usize > io.data.len() || io.address_length != 80 {
             return Err(CaptureError::new(ErrorKind::InvalidPacket, None));
         }
         io.data.truncate(io.length as usize);
         let bytes = std::mem::take(&mut io.data);
-        Ok(Poll::Packet(Packet { bytes, address: io.address.clone() }))
+        Ok(Poll::Packet(Packet {
+            bytes,
+            address: io.address.clone(),
+        }))
     }
 
     pub fn send(&mut self, bytes: &[u8], address: &Address) -> Result<(), CaptureError> {
-        if self.mode == Mode::Sniff || self.handle.is_null() || self.pending.is_some()
-            || bytes.is_empty() || bytes.len() > MAX_PACKET {
+        if self.mode == Mode::Sniff
+            || self.handle.is_null()
+            || self.pending.is_some()
+            || bytes.is_empty()
+            || bytes.len() > MAX_PACKET
+        {
             return Err(CaptureError::new(ErrorKind::Send, None));
         }
         // Copy only for stable async ownership. Never rewrite bytes or address.
         let mut io = Io::new(bytes.to_vec(), address.clone())?;
-        debug_assert!(io.data == bytes && io.address == *address, "Phase 2 native byte/address invariant");
+        debug_assert!(
+            io.data == bytes && io.address == *address,
+            "Phase 2 native byte/address invariant"
+        );
         // SAFETY: owned immutable packet/address, stable output length and
         // OVERLAPPED storage retained until completion or quarantine.
-        let ok = unsafe { (self.api.send)(self.handle, io.data.as_ptr().cast(), bytes.len() as u32,
-            &mut io.length, 0, &io.address, 80, &mut io.overlapped) };
+        let ok = unsafe {
+            (self.api.send)(
+                self.handle,
+                io.data.as_ptr().cast(),
+                bytes.len() as u32,
+                &mut io.length,
+                0,
+                &io.address,
+                80,
+                &mut io.overlapped,
+            )
+        };
         if ok == 0 {
             let e = error(ErrorKind::Send);
-            if e.os_code != Some(IO_PENDING) { return Err(e); }
+            if e.os_code != Some(IO_PENDING) {
+                return Err(e);
+            }
         }
         self.pending = Some(io);
         if ok == 0 && !self.wait(1000, ErrorKind::Send)? {
             return Err(CaptureError::new(ErrorKind::Send, Some(WAIT_TIMEOUT)));
         }
-        let io = self.pending.take().ok_or(CaptureError::new(ErrorKind::Send, None))?;
+        let io = self
+            .pending
+            .take()
+            .ok_or(CaptureError::new(ErrorKind::Send, None))?;
         if io.length as usize != bytes.len() {
             return Err(CaptureError::new(ErrorKind::Send, None));
         }
@@ -295,28 +472,42 @@ impl Capture {
     }
 
     pub fn shutdown_receive(&mut self) -> Result<(), CaptureError> {
-        if self.stopped || self.handle.is_null() { return Ok(()); }
+        if self.stopped || self.handle.is_null() {
+            return Ok(());
+        }
         // SAFETY: valid owned handle; RECV=1 stops new admission but permits drain/send.
-        if unsafe { (self.api.shutdown)(self.handle, 1) } == 0 { return Err(error(ErrorKind::Shutdown)); }
+        if unsafe { (self.api.shutdown)(self.handle, 1) } == 0 {
+            return Err(error(ErrorKind::Shutdown));
+        }
         self.stopped = true;
         Ok(())
     }
 
     pub fn close(&mut self) -> Result<(), CaptureError> {
-        if self.handle.is_null() { return Ok(()); }
+        if self.handle.is_null() {
+            return Ok(());
+        }
         let mut failure = self.shutdown_receive().err();
         if let Some(io) = self.pending.as_mut() {
             // SAFETY: exact pending OVERLAPPED, alive for cancellation and completion.
             if unsafe { CancelIoEx(self.handle, &mut io.overlapped) } == 0 {
                 let e = error(ErrorKind::Shutdown);
-                if e.os_code != Some(1168) { failure = Some(e); }
+                if e.os_code != Some(1168) {
+                    failure = Some(e);
+                }
             }
             match self.wait(1000, ErrorKind::Shutdown) {
-                Ok(true) => { self.pending.take(); }
+                Ok(true) => {
+                    self.pending.take();
+                }
                 // OPERATION_ABORTED is an expected terminal cancellation result.
                 Err(e) if e.os_code == Some(995) => (),
-                Err(e) => { failure = Some(e); }
-                Ok(false) => { failure = Some(CaptureError::new(ErrorKind::Shutdown, Some(WAIT_TIMEOUT))); }
+                Err(e) => {
+                    failure = Some(e);
+                }
+                Ok(false) => {
+                    failure = Some(CaptureError::new(ErrorKind::Shutdown, Some(WAIT_TIMEOUT)));
+                }
             }
         }
         if let Some(io) = self.pending.take() {
@@ -325,18 +516,25 @@ impl Capture {
             // of an infinite wait or freeing memory still owned by pending I/O.
             std::mem::forget(io);
             std::mem::forget(Rc::clone(&self.api));
+            std::mem::forget(self.instance.take());
             self.handle = ptr::null_mut();
             return Err(failure.unwrap_or(CaptureError::new(ErrorKind::Shutdown, None)));
         }
         // SAFETY: no pending operations remain; handle closed once; library retained.
-        if unsafe { (self.api.close)(self.handle) } == 0 { failure = Some(error(ErrorKind::Shutdown)); }
+        if unsafe { (self.api.close)(self.handle) } == 0 {
+            failure = Some(error(ErrorKind::Shutdown));
+        }
         self.handle = ptr::null_mut();
+        self.instance.take();
         failure.map_or(Ok(()), Err)
     }
 }
+
 impl Drop for Capture {
     fn drop(&mut self) {
-        if let Err(e) = self.close() { eprintln!("{e}"); }
+        if let Err(e) = self.close() {
+            eprintln!("{e}");
+        }
     }
 }
 
@@ -346,13 +544,19 @@ extern "system" fn console_control(kind: u32) -> i32 {
     if kind == 0 || kind == 1 {
         STOP.store(true, Ordering::Release);
         1
-    } else { 0 }
+    } else {
+        0
+    }
 }
 
-pub struct ConsoleStop { installed: bool }
+pub struct ConsoleStop {
+    installed: bool,
+}
 impl ConsoleStop {
     pub fn install() -> Result<Self, CaptureError> {
-        if INSTALLED.swap(true, Ordering::AcqRel) { return Err(CaptureError::new(ErrorKind::Shutdown, None)); }
+        if INSTALLED.swap(true, Ordering::AcqRel) {
+            return Err(CaptureError::new(ErrorKind::Shutdown, None));
+        }
         STOP.store(false, Ordering::Release);
         // SAFETY: callback has static lifetime, only accesses static atomics.
         if unsafe { SetConsoleCtrlHandler(Some(console_control), 1) } == 0 {
@@ -362,11 +566,17 @@ impl ConsoleStop {
         }
         Ok(Self { installed: true })
     }
-    pub fn flag(&self) -> &AtomicBool { &STOP }
+    pub fn flag(&self) -> &AtomicBool {
+        &STOP
+    }
     pub fn close(&mut self) -> Result<(), CaptureError> {
-        if !self.installed { return Ok(()); }
+        if !self.installed {
+            return Ok(());
+        }
         // SAFETY: same static callback registered above; no invalidated context.
-        if unsafe { SetConsoleCtrlHandler(Some(console_control), 0) } == 0 { return Err(error(ErrorKind::Shutdown)); }
+        if unsafe { SetConsoleCtrlHandler(Some(console_control), 0) } == 0 {
+            return Err(error(ErrorKind::Shutdown));
+        }
         self.installed = false;
         INSTALLED.store(false, Ordering::Release);
         Ok(())
@@ -374,6 +584,27 @@ impl ConsoleStop {
 }
 impl Drop for ConsoleStop {
     fn drop(&mut self) {
-        if let Err(e) = self.close() { eprintln!("{e}"); }
+        if let Err(e) = self.close() {
+            eprintln!("{e}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod instance_tests {
+    use super::*;
+    #[test]
+    fn second_instance_is_rejected_and_lock_is_released() {
+        let name = format!(r"Local\LocalDpiBypass.UnitTest.{}", std::process::id());
+        let first = InstanceGuard::acquire(&name).unwrap();
+        assert!(matches!(
+            InstanceGuard::acquire(&name),
+            Err(CaptureError {
+                kind: ErrorKind::AlreadyRunning,
+                ..
+            })
+        ));
+        drop(first);
+        assert!(InstanceGuard::acquire(&name).is_ok());
     }
 }

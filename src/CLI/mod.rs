@@ -1,4 +1,4 @@
-pub const HELP: &str = "Local DPI Bypass — Phase 9 (Read-Only Diagnostics & Sanitized Logging)
+pub const HELP: &str = "Local DPI Bypass — TCP-only test candidate (voice/QUIC bypass unavailable)
 Implemented: start [--dry-run] | status | strategies | config show | test [--mock]
              service install | remove | status | start | stop | restart
              diagnose | logs | help
@@ -6,16 +6,20 @@ Reserved (Phase 10): restart | use <strategy>
 Reserved commands return exit code 2 without side effects.
 Administrator privileges and WinDivert/WinDivert64.sys are required for start and service.";
 
-pub struct Reply { pub code: u8, pub text: String }
+pub struct Reply {
+    pub code: u8,
+    pub text: String,
+}
 
 /// Pure dispatch: no filesystem, network, registry or SCM access for read-only commands.
 /// `start` is the one command that opens captures and requires administrator privileges.
 pub fn dispatch(args: &[&str]) -> Reply {
     let (code, text) = match args {
+        ["--version"] | ["version"] => (0, format!("Local DPI Bypass {} (TCP-only candidate)", env!("CARGO_PKG_VERSION"))),
         [] | ["help"] | ["--help"] | ["-h"] => (0, HELP.to_owned()),
-        ["status"] => (0, "Phase: 9\nEngine: Read-only diagnostics & sanitized logging enabled\nService: not queried (use 'service status')\nStrategy: pass-through / split-tcp\nConfiguration: not loaded (use start or service start to run)\nPacket counters: unavailable until started".into()),
-        ["strategies"] => (0, "pass-through: active — byte-exact reinject, no modification\nsplit-tcp: active — initial TCP payload segmentation\nsplit-tls: planned\nreorder / decoy / quic / stun: design candidates, disabled".into()),
-        ["config", "show"] => (0, format!("# Built-in example, NOT loaded runtime configuration\n{}", crate::core::config::EXAMPLE_TOML)),
+        ["status"] => (0, format!("Version: {}\nEngine: TCP-only candidate\nService: not queried (use 'service status')\nStrategy: pass-through / split-tcp\nVoice/QUIC bypass: unavailable\nConfiguration: use 'config show'\nCounters: shown only by the running console", env!("CARGO_PKG_VERSION"))),
+        ["strategies"] => (0, "pass-through: active — byte-exact reinject, no modification\nsplit-tcp: active — initial TCP payload segmentation\nauto / split-tls / reorder / decoy / quic / stun: unavailable in runtime".into()),
+        ["config", "show"] => show_config(),
         ["start"] => run_engine(false),
         ["start", "--dry-run"] => run_engine(true),
         ["test"] => crate::core::tester::execute_tester(false),
@@ -31,11 +35,44 @@ pub fn dispatch(args: &[&str]) -> Reply {
     Reply { code, text }
 }
 
+fn show_config() -> (u8, String) {
+    use std::io::Read;
+    let result = (|| -> Result<String, crate::capture::CaptureError> {
+        let root = windivert_adapter::application_dir()?;
+        crate::core::config_loader::load_config(&root)?;
+        let path = windivert_adapter::validated_file(
+            &root,
+            "config/default.toml",
+            crate::capture::ErrorKind::InvalidConfiguration,
+        )?;
+        let file = std::fs::File::open(path).map_err(|e| {
+            crate::capture::CaptureError::from_io(
+                crate::capture::ErrorKind::InvalidConfiguration,
+                &e,
+            )
+        })?;
+        let mut text = String::new();
+        file.take(16384).read_to_string(&mut text).map_err(|e| {
+            crate::capture::CaptureError::from_io(
+                crate::capture::ErrorKind::InvalidConfiguration,
+                &e,
+            )
+        })?;
+        Ok(text)
+    })();
+    match result {
+        Ok(text) => (0, text),
+        Err(error) => (
+            1,
+            format!("Cannot load application config/default.toml: {error}"),
+        ),
+    }
+}
+
 fn run_engine(dry_run: bool) -> (u8, String) {
-    use crate::core::{RunMode, PacketEngine as _, pipeline::PassThroughEngine};
-    use crate::core::phase2_config::Phase2Config;
-    use crate::core::config_loader::load_config;
     use crate::capture::windivert::WinDivertCapture;
+    use crate::core::config_loader::load_config;
+    use crate::core::{pipeline::PassThroughEngine, PacketEngine as _, RunMode};
 
     // ── Load and validate full config/default.toml + TXT lists ──────────────
     let app_dir = match windivert_adapter::application_dir() {
@@ -49,27 +86,22 @@ fn run_engine(dry_run: bool) -> (u8, String) {
 
     // CLI --dry-run flag overrides config; config dry_run=true always wins.
     let effective_dry_run = dry_run || loaded.dry_run;
-    let mode = if effective_dry_run { RunMode::DryRun } else { RunMode::Active };
-    let mode_label = if effective_dry_run { "dry-run (sniff)" } else { "active (capture+reinject)" };
+    let mode = if effective_dry_run {
+        RunMode::DryRun
+    } else {
+        RunMode::Active
+    };
+    let mode_label = if effective_dry_run {
+        "dry-run (sniff)"
+    } else {
+        "active (capture+reinject)"
+    };
 
-    // ── Load Phase 2 capture config (validation & fallback) ────────────────
-    let p2_config = Phase2Config::load().map(|(c, _)| c).ok();
-
-    // Use dynamic WinDivert filter based on all active presets (or fallback to p2_config)
+    // Open the requested filter; preserve the original OS failure on error.
     let dynamic_filter = loaded.filter_engine.build_windivert_filter();
     let capture = match WinDivertCapture::open_filter(&dynamic_filter, mode) {
-        Ok(c) => c,
-        Err(_) => {
-            // Fallback to phase2.toml if dynamic open fails
-            if let Some(ref p2) = p2_config {
-                match WinDivertCapture::open(p2, mode) {
-                    Ok(c) => c,
-                    Err(e) => return (1, format!("Capture open failed: {e}")),
-                }
-            } else {
-                return (1, "Capture open failed: unable to initialize WinDivert driver".into());
-            }
-        }
+        Ok(capture) => capture,
+        Err(error) => return (1, format!("Capture open failed: {error}")),
     };
 
     let mut stop_handler = match windivert_adapter::ConsoleStop::install() {
@@ -77,18 +109,27 @@ fn run_engine(dry_run: bool) -> (u8, String) {
         Err(e) => return (1, format!("Ctrl+C handler install failed: {e}")),
     };
 
-    eprintln!("unzapret-by-sh1dan engine started.");
+    eprintln!(
+        "unzapret-by-sh1dan {} engine started.",
+        env!("CARGO_PKG_VERSION")
+    );
     eprintln!("  Mode:     {mode_label}");
     eprintln!("  Strategy: {}", loaded.strategy);
-    eprintln!("  Filter:   Active presets (YouTube, Discord, Voice/STUN, Twitch, Telegram)");
-    eprintln!("  Max flows: {}, idle {}s, initial pkts: {}",
-        loaded.max_flows, loaded.flow_idle_seconds, loaded.max_packets_per_flow);
+    eprintln!(
+        "  Config:   {}",
+        app_dir.join("config/default.toml").display()
+    );
+    eprintln!("  Presets:  {} enabled", loaded.filter_engine.presets.len());
+    eprintln!("  Voice/QUIC bypass: unavailable; UDP is not modified by split-tcp.");
+    eprintln!(
+        "  Max flows: {}, idle {}s, initial pkts: {}",
+        loaded.max_flows, loaded.flow_idle_seconds, loaded.max_packets_per_flow
+    );
     eprintln!("Press Ctrl+C to stop.");
 
-    let strategy_impl: Box<dyn crate::strategies::Strategy> = match loaded.strategy.as_str() {
-        "pass-through" => Box::new(crate::strategies::PassThrough),
-        "split-tcp-only" => Box::new(crate::strategies::SplitTcp::default()),
-        _ => Box::new(crate::strategies::AutoBypass::default()),
+    let strategy_impl = match crate::strategies::create(&loaded.strategy) {
+        Ok(strategy) => strategy,
+        Err(error) => return (1, format!("Unsupported strategy: {error}")),
     };
 
     let flow_table = crate::core::flow::FlowTable::new(
@@ -104,13 +145,15 @@ fn run_engine(dry_run: bool) -> (u8, String) {
         flow_table,
         strategy_impl,
         |counters| {
-            eprintln!("[counters] processed={} reinserted={} modified={} errors={} dropped={}",
-                counters.processed, counters.reinserted, counters.modified, counters.errors, counters.dropped);
+            eprintln!("[counters] {counters}");
         },
     );
 
     let result = engine.run(mode, stop_flag);
-    let _ = stop_handler.close();
+    eprintln!("[final counters] {}", engine.counters());
+    if let Err(error) = stop_handler.close() {
+        return (1, format!("Console handler cleanup failed: {error}"));
+    }
 
     match result {
         Ok(counters) => (0, format!(

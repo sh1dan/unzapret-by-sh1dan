@@ -56,7 +56,11 @@ fn check_windivert_availability() -> CheckResult {
         Ok((dll, sys)) => CheckResult {
             name,
             status: CheckStatus::Ok,
-            message: format!("Driver files verified ({}, {})", dll.display(), sys.display()),
+            message: format!(
+                "Driver files verified ({}, {})",
+                dll.display(),
+                sys.display()
+            ),
         },
         Err(e) => CheckResult {
             name,
@@ -79,19 +83,28 @@ fn check_dns_dual_stack() -> CheckResult {
                 CheckResult {
                     name,
                     status: CheckStatus::Ok,
-                    message: format!("Dual-stack operational ({} addresses: IPv4 + IPv6)", addrs.len()),
+                    message: format!(
+                        "Dual-stack operational ({} addresses: IPv4 + IPv6)",
+                        addrs.len()
+                    ),
                 }
             } else if has_v4 {
                 CheckResult {
                     name,
                     status: CheckStatus::Ok,
-                    message: format!("DNS operational (IPv4 available, {} addrs; no IPv6 detected)", addrs.len()),
+                    message: format!(
+                        "DNS operational (IPv4 available, {} addrs; no IPv6 detected)",
+                        addrs.len()
+                    ),
                 }
             } else if has_v6 {
                 CheckResult {
                     name,
                     status: CheckStatus::Ok,
-                    message: format!("DNS operational (IPv6 available, {} addrs; no IPv4 detected)", addrs.len()),
+                    message: format!(
+                        "DNS operational (IPv6 available, {} addrs; no IPv4 detected)",
+                        addrs.len()
+                    ),
                 }
             } else {
                 CheckResult {
@@ -118,12 +131,13 @@ fn check_youtube_https() -> CheckResult {
         port: 443,
         protocol: "HTTPS",
     };
-    let (status, latency) = crate::core::tester::probe_live_tls(&target, Duration::from_millis(3000));
+    let (status, latency) =
+        crate::core::tester::probe_live_tls(&target, Duration::from_millis(3000));
     match status {
         crate::core::tester::ProbeStatus::Ok(ver) => CheckResult {
             name,
-            status: CheckStatus::Ok,
-            message: format!("TLS handshake responsive ({ver}, {latency} ms)"),
+            status: CheckStatus::NotRun,
+            message: format!("TLS record header received ({ver}, {latency} ms); certificate, complete handshake and HTTPS response NOT verified"),
         },
         s => CheckResult {
             name,
@@ -142,12 +156,13 @@ fn check_discord_https() -> CheckResult {
         port: 443,
         protocol: "HTTPS",
     };
-    let (status, latency) = crate::core::tester::probe_live_tls(&target, Duration::from_millis(3000));
+    let (status, latency) =
+        crate::core::tester::probe_live_tls(&target, Duration::from_millis(3000));
     match status {
         crate::core::tester::ProbeStatus::Ok(ver) => CheckResult {
             name,
-            status: CheckStatus::Ok,
-            message: format!("TLS handshake responsive ({ver}, {latency} ms)"),
+            status: CheckStatus::NotRun,
+            message: format!("TLS record header received ({ver}, {latency} ms); certificate, complete handshake and HTTPS response NOT verified"),
         },
         s => CheckResult {
             name,
@@ -172,19 +187,11 @@ fn check_discord_voice_prerequisites() -> CheckResult {
     let name = PLANNED_CHECKS[6];
     // Verify local UDP socket creation and binding
     match UdpSocket::bind("0.0.0.0:0") {
-        Ok(sock) => {
-            let _ = sock.set_read_timeout(Some(Duration::from_millis(1500)));
-            let stun_req = crate::core::stun::build_test_stun_binding_request();
-            // Test sending STUN request to a known Discord RTC IP (from preset)
-            let rtc_addr: SocketAddr = "162.159.138.232:50001".parse().unwrap();
-            let _ = sock.send_to(&stun_req, rtc_addr);
-
-            CheckResult {
-                name,
-                status: CheckStatus::Ok,
-                message: "Local UDP socket bound and STUN framing valid".into(),
-            }
-        }
+        Ok(_sock) => CheckResult {
+            name,
+            status: CheckStatus::NotRun,
+            message: "Local UDP bind succeeded. Remote Discord voice connectivity was NOT tested; no UDP probe was sent.".into(),
+        },
         Err(e) => CheckResult {
             name,
             status: CheckStatus::Failed,
@@ -196,10 +203,17 @@ fn check_discord_voice_prerequisites() -> CheckResult {
 fn check_proxy_vpn_settings() -> CheckResult {
     let name = PLANNED_CHECKS[7];
     let mut detected = Vec::new();
-    for var in &["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] {
+    for var in &[
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ] {
         if let Ok(val) = std::env::var(var) {
             if !val.is_empty() {
-                detected.push(format!("{var}={val}"));
+                detected.push((*var).to_owned());
             }
         }
     }
@@ -208,13 +222,17 @@ fn check_proxy_vpn_settings() -> CheckResult {
         CheckResult {
             name,
             status: CheckStatus::Ok,
-            message: "No competing environment proxies detected (direct connection)".into(),
+            message: "No proxy environment variables set; Windows proxy/VPN state was not checked"
+                .into(),
         }
     } else {
         CheckResult {
             name,
             status: CheckStatus::Ok,
-            message: format!("Proxy variables detected: {}", detected.join(", ")),
+            message: format!(
+                "Proxy variables set (values redacted): {}",
+                detected.join(", ")
+            ),
         }
     }
 }
@@ -243,7 +261,10 @@ fn check_packet_filter_drivers() -> CheckResult {
         CheckResult {
             name,
             status: CheckStatus::Failed,
-            message: format!("Conflicting filter service(s) running: {}", active.join(", ")),
+            message: format!(
+                "Conflicting filter service(s) running: {}",
+                active.join(", ")
+            ),
         }
     }
 }

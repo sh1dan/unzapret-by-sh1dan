@@ -2,7 +2,7 @@
 //! Proposes splitting initial client TCP payload into two segments
 //! at a configurable byte offset (default 2 bytes).
 
-use super::{Strategy, ProcessResult};
+use super::{ProcessResult, Strategy};
 use crate::core::{PacketContext, Transport};
 use crate::filtering::FilterDecision;
 
@@ -64,7 +64,10 @@ mod tests {
             filter: FilterDecision::Allow,
         };
         assert!(strat.matches(&allowed_initial));
-        assert_eq!(strat.process(&allowed_initial), ProcessResult::SplitTcp { payload_offset: 2 });
+        assert_eq!(
+            strat.process(&allowed_initial),
+            ProcessResult::SplitTcp { payload_offset: 2 }
+        );
 
         let excluded = PacketContext {
             filter: FilterDecision::Exclude,

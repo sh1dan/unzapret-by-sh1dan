@@ -32,7 +32,9 @@ impl std::fmt::Display for LogLevel {
 
 /// Formats current UTC timestamp as ISO-8601 string without external chrono crate.
 fn current_timestamp() -> String {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     let total_secs = now.as_secs();
     let days_since_epoch = total_secs / 86400;
     let day_secs = total_secs % 86400;
@@ -55,7 +57,18 @@ fn current_timestamp() -> String {
 
     let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
     let month_days = [
-        31, if is_leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+        31,
+        if is_leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
     ];
     let mut month = 1;
     for &md in &month_days {
@@ -87,15 +100,20 @@ pub fn sanitize_message(msg: &str) -> String {
     // Strip control characters, keep single-line readable ASCII
     let filtered: String = msg
         .chars()
-        .map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { ' ' })
+        .map(|c| {
+            if c.is_ascii_graphic() || c == ' ' {
+                c
+            } else {
+                ' '
+            }
+        })
         .collect();
     filtered.trim().to_string()
 }
 
 /// Appends a sanitized entry to logs/app.log.
 pub fn append_log(level: LogLevel, category: &str, message: &str) -> std::io::Result<()> {
-    let app_dir = windivert_adapter::application_dir()
-        .unwrap_or_else(|_| PathBuf::from("."));
+    let app_dir = windivert_adapter::application_dir().unwrap_or_else(|_| PathBuf::from("."));
     let log_dir = app_dir.join(LOG_DIR);
     let _ = fs::create_dir_all(&log_dir);
     let log_path = log_dir.join(LOG_FILE);
@@ -118,32 +136,28 @@ pub fn log_lifecycle(action: &str) {
 }
 
 pub fn log_counters(counters: &crate::core::Counters) {
-    let msg = format!(
-        "processed={} reinserted={} modified={} errors={} dropped={}",
-        counters.processed, counters.reinserted, counters.modified, counters.errors, counters.dropped
-    );
+    let msg = counters.to_string();
     let _ = append_log(LogLevel::Info, "COUNTERS", &msg);
 }
 
 /// Reads the last `max_lines` from the log file.
 pub fn read_recent_logs(max_lines: usize) -> Result<Vec<String>, String> {
-    let app_dir = windivert_adapter::application_dir()
-        .map_err(|e| format!("Cannot resolve app dir: {e}"))?;
+    let app_dir =
+        windivert_adapter::application_dir().map_err(|e| format!("Cannot resolve app dir: {e}"))?;
     let log_path = app_dir.join(LOG_DIR).join(LOG_FILE);
 
     if !log_path.exists() {
-        return Ok(vec!["(Log file does not exist yet. Run 'start' or 'diagnose' to generate events.)".into()]);
+        return Ok(vec![
+            "(Log file does not exist yet. Run 'start' or 'diagnose' to generate events.)".into(),
+        ]);
     }
 
-    let file = File::open(&log_path)
-        .map_err(|e| format!("Cannot open log file: {e}"))?;
+    let file = File::open(&log_path).map_err(|e| format!("Cannot open log file: {e}"))?;
     let reader = BufReader::new(file);
 
     let mut lines = Vec::new();
-    for line in reader.lines() {
-        if let Ok(l) = line {
-            lines.push(l);
-        }
+    for line in reader.lines().map_while(Result::ok) {
+        lines.push(line);
     }
 
     if lines.len() > max_lines {

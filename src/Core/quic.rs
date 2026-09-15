@@ -28,10 +28,21 @@ pub fn parse_varint(bytes: &[u8]) -> Result<(u64, usize), QuicError> {
     let value = match len {
         1 => u64::from(first & 0x3f),
         2 => u64::from(u16::from_be_bytes([first & 0x3f, bytes[1]])),
-        4 => u64::from(u32::from_be_bytes([first & 0x3f, bytes[1], bytes[2], bytes[3]])),
+        4 => u64::from(u32::from_be_bytes([
+            first & 0x3f,
+            bytes[1],
+            bytes[2],
+            bytes[3],
+        ])),
         8 => u64::from_be_bytes([
-            first & 0x3f, bytes[1], bytes[2], bytes[3],
-            bytes[4], bytes[5], bytes[6], bytes[7],
+            first & 0x3f,
+            bytes[1],
+            bytes[2],
+            bytes[3],
+            bytes[4],
+            bytes[5],
+            bytes[6],
+            bytes[7],
         ]),
         _ => unreachable!(),
     };

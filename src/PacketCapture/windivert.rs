@@ -18,17 +18,23 @@ impl WinDivertCapture {
             RunMode::Active => Mode::Active,
             RunMode::DryRun => Mode::Sniff,
         };
-        Ok(Self { inner: Capture::open(filter, native_mode)?, mode })
+        Ok(Self {
+            inner: Capture::open(filter, native_mode)?,
+            mode,
+        })
     }
 }
 
 impl PacketCapture for WinDivertCapture {
     type Address = Address;
-    fn mode(&self) -> RunMode { self.mode }
+    fn mode(&self) -> RunMode {
+        self.mode
+    }
     fn receive(&mut self) -> Result<ReceiveEvent<Address>, CaptureError> {
         Ok(match self.inner.receive()? {
             Poll::Packet(packet) => ReceiveEvent::Packet(CapturedPacket {
-                bytes: packet.bytes, address: packet.address,
+                bytes: packet.bytes,
+                address: packet.address,
             }),
             Poll::Idle => ReceiveEvent::Idle,
             Poll::End => ReceiveEvent::End,
@@ -37,6 +43,10 @@ impl PacketCapture for WinDivertCapture {
     fn send(&mut self, packet: &CapturedPacket<Address>) -> Result<(), CaptureError> {
         self.inner.send(&packet.bytes, &packet.address)
     }
-    fn shutdown_receive(&mut self) -> Result<(), CaptureError> { self.inner.shutdown_receive() }
-    fn close(&mut self) -> Result<(), CaptureError> { self.inner.close() }
+    fn shutdown_receive(&mut self) -> Result<(), CaptureError> {
+        self.inner.shutdown_receive()
+    }
+    fn close(&mut self) -> Result<(), CaptureError> {
+        self.inner.close()
+    }
 }

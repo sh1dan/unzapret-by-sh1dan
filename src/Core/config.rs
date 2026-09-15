@@ -30,14 +30,20 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             schema_version: 1,
-            targets: Targets { youtube: true, discord: true, discord_voice: false, custom: false },
+            targets: Targets {
+                youtube: true,
+                discord: true,
+                discord_voice: false,
+                custom: false,
+            },
             strategy: "pass-through".into(),
             dry_run: true,
             limits: Limits {
-                max_flows: 4096, flow_idle_seconds: 30,
-                max_initial_bytes: 16384, max_packets_per_flow: 4,
+                max_flows: 4096,
+                flow_idle_seconds: 30,
+                max_initial_bytes: 16384,
+                max_packets_per_flow: 4,
             },
         }
     }
 }
-

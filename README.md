@@ -1,149 +1,89 @@
-# unzapret-by-sh1dan — Local DPI Bypass for Windows
+# unzapret-by-sh1dan — 1.0.5-rc.1
 
-[![CI & Release](https://github.com/sh1dan/unzapret-by-sh1dan/actions/workflows/ci.yml/badge.svg)](https://github.com/sh1dan/unzapret-by-sh1dan/actions/workflows/ci.yml)
-[![Latest Release](https://img.shields.io/github/v/release/sh1dan/unzapret-by-sh1dan?color=brightgreen)](https://github.com/sh1dan/unzapret-by-sh1dan/releases/latest)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Platform: Windows 10/11 x64](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011%20x64-blue.svg)](https://github.com/sh1dan/unzapret-by-sh1dan)
+Экспериментальный локальный Windows 10/11 x64 TCP-профиль поверх WinDivert 2.2.
+Прямое соединение с сервером сохраняется; VPN/proxy/tunnel не используется.
 
-**unzapret-by-sh1dan** — автономная, быстрая и безопасная программа для Windows 10/11 на языке **Rust** для обхода блокировок и замедлений (DPI) с использованием драйвера WinDivert 2.2.
+**Это тестовая сборка исправлений, а не подтверждённый обход Discord Voice.**
+Она исправляет неожиданный выбор AutoBypass, ошибочное разрешение UDP по порту,
+ложные счётчики dry-run и сообщения диагностики. Стратегии обхода голосового UDP
+и QUIC в этой версии недоступны. В комплекте UDP capture выключен.
+Работа TCP split зависит от провайдера, доступного SNI и конкретного соединения.
 
-> [!TIP]
-> **Прямое соединение без VPN и серверов-посредников**: программа работает локально на вашем компьютере (`ваш ПК -> целевой сайт`). Скорость интернета и пинг не режутся, ваши пароли и данные не проходят через чужие серверы, телеметрии нет.
+## Проверка у друга
 
----
+1. Завершить старую консоль через Ctrl+C. Если установлена служба — выполнить
+   `dpi-bypass.exe service stop` из старой папки от администратора. Проверить
+   `dpi-bypass.exe service status`: служба должна быть Stopped или Not Installed.
+2. Распаковать новый ZIP **в отдельную папку**, без переноса старого config.
+3. Запустить `start.cmd`. В окне должна отображаться версия `1.0.5-rc.1`,
+   `Mode: active` и `Strategy: split-tcp`. Консоль оставлять открытой.
+4. Полностью перезапустить Discord/браузер, проверить текст/HTTPS и отдельно voice.
+   Сохранить 2–3 строки `[counters]`, сведения о пинге и название провайдера.
+5. Остановить через Ctrl+C и сравнить с программой, полностью выключенной.
+   Для сравнения capture overhead можно отдельно запустить `start_dry_run.cmd`.
+   Во время sniff-теста `modified=0`; `would_modify` обозначает только намерение.
 
-## 🚀 Быстрый старт (для обычных пользователей)
+До результата этой проверки новую службу устанавливать не нужно. Старые версии
+не поддерживают новый mutex; их нужно остановить вручную. Новый mutex предотвращает
+конкуренцию экземпляров новой версии, но не обнаруживает все сторонние WFP-драйверы.
 
-Вам **не нужно** ничего компилировать или устанавливать среды разработки:
+Если voice не работает и при полностью выключенном приложении, эта TCP-сборка
+может не изменить ситуацию: отдельный рабочий voice-профиль ещё предстоит реализовать
+и испытать. Не добавляйте весь интернет в IP allowlist и не удаляйте exclusions.
 
-1. **Скачайте готовый архив**:
-   👉 **[Скачать unzapret-by-sh1dan (ZIP архив)](https://github.com/sh1dan/unzapret-by-sh1dan/releases/latest)**
-2. **Распакуйте архив** в любую удобную папку (например, `C:\unzapret` или на Рабочий стол).
-3. **Запустите обход**:
-   - Дважды кликните по **`start.cmd`** (скрипт сам запросит права Администратора).
-   - В открывшемся окне отобразится статус работы.
-   - Откройте браузер или приложения: **YouTube (4K), Discord (включая голосовые каналы), Twitch, Telegram** теперь работают без блокировок!
-   - Чтобы закрыть программу — просто нажмите `Ctrl + C` или закройте окно консоли.
-
-> [!NOTE]
-> **Хотите, чтобы программа работала незаметно в фоне и запускалась вместе с Windows?**  
-> Кликните правой кнопкой мыши по **`service_install.cmd`** и запустите от имени Администратора.  
-> Для полного удаления службы используйте **`service_remove.cmd`**.
-
----
-
-## 🎯 Что работает «из коробки»
-
-- 📺 **YouTube**: видео открываются моментально в исходном качестве (1080p, 2K, 4K, 60fps).
-- 💬 **Discord**: работает текст, картинки, медиа и **Discord Voice** (голосовые каналы и звонки благодаря специальному профилю для STUN/RTP портов).
-- 🎮 **Twitch**: прямые трансляции в максимальном качестве без буферизации.
-- ✈️ **Telegram**: веб-клиент и десктопное приложение.
-- 🌐 **Любые другие сайты**: просто допишите нужный домен в файл `config/domains.txt`.
-
----
-
-## 📂 Готовые скрипты управления (в один клик)
-
-В папке программы подготовлены удобные скрипты с автоматическим запросом прав администратора (UAC):
-
-| Скрипт | Что делает |
-|---|---|
-| **`start.cmd`** | Запуск обхода в окне консоли (остановка: `Ctrl+C` или закрытие окна). |
-| **`service_install.cmd`** | Установка службы Windows (работает в фоне, автозапуск с Windows). |
-| **`service_remove.cmd`** | Полная остановка и удаление службы из системы. |
-| **`service_status.cmd`** | Проверка текущего статуса службы (`Running` / `Stopped`). |
-| **`diagnose.cmd`** | Автоматическая проверка системы (права, драйвер, DNS, доступность сервисов). |
-| **`test.cmd`** | Экспресс-тест доступности YouTube, Discord, Twitch и Telegram. |
-| **`logs.cmd`** | Просмотр последних событий и сообщений программы. |
-| **`start_dry_run.cmd`** | Безопасный тестовый режим (сниффер без изменения пакетов). |
-
----
-
-## Использование через командную строку (CLI)
+## Команды
 
 ```powershell
-# Запуск движка обхода (требуются права администратора)
+dpi-bypass.exe --version
 dpi-bypass.exe start
-
-# Запуск в безопасном режиме сниффера (без изменения пакетов)
 dpi-bypass.exe start --dry-run
-
-# Тестирование стратегий обхода (YouTube, Discord, Twitch, Telegram)
-dpi-bypass.exe test
-
-# Управление службой Windows
-dpi-bypass.exe service install   # Установка автозапускаемой службы
-dpi-bypass.exe service start     # Запуск службы
-dpi-bypass.exe service status    # Проверка статуса службы
-dpi-bypass.exe service stop      # Остановка службы
-dpi-bypass.exe service remove    # Удаление службы
-
-# Диагностика и логи
-dpi-bypass.exe diagnose          # Read-only диагностика системы
-dpi-bypass.exe logs              # Просмотр последних логов
-
-# Информационные команды
-dpi-bypass.exe status            # Текущий статус движка
-dpi-bypass.exe strategies        # Список поддерживаемых стратегий
-dpi-bypass.exe config show       # Просмотр примера конфигурации
-dpi-bypass.exe help              # Справка по командам
+dpi-bypass.exe service status
+dpi-bypass.exe service stop
+dpi-bypass.exe config show
+dpi-bypass.exe strategies
+dpi-bypass.exe diagnose
 ```
 
----
+`config show` читает реальный `config/default.toml` рядом с executable.
+`status` не является live IPC-запросом к другой консоли.
+`test` выполняет лишь частичные TLS connectivity probes, не запускает стратегии,
+не проверяет сертификаты/полный HTTPS/voice и возвращает код 2 (INCONCLUSIVE).
+`test --mock` — только синтетическая демонстрация, не доказательство доступности.
+`diagnose` теперь отделяет локальный UDP bind от непроверенной удалённой связности;
+значения proxy environment variables скрыты.
 
-## Структура дистрибутива (`run/`)
+`split-tcp` выбирает только SplitTcp. `auto` и неизвестные/выключенные стратегии
+отклоняются. Экспериментальные модули UDP остались в исходниках для дальнейшего
+аудита, но недоступны через runtime-фабрику профилей этого кандидата.
 
-```text
-run/
-├── dpi-bypass.exe          # Релизный бинарник (LTO, strip, overflow checks)
-├── WinDivert/
-│   ├── WinDivert.dll       # Пользовательская библиотека WinDivert 2.2
-│   └── WinDivert64.sys     # Драйвер перехвата пакетов x86_64
-├── config/
-│   ├── default.toml        # Основная строгая конфигурация
-│   ├── phase2.toml         # Конфигурация перехватываемых IP и портов
-│   ├── domains.txt         # Пользовательские разрешённые домены
-│   ├── ips.txt             # Пользовательские разрешённые IP / CIDR
-│   ├── exclude-domains.txt # Исключённые домены (всегда pass-through)
-│   ├── exclude-ips.txt     # Исключённые IP / CIDR
-│   └── presets/            # Готовые списки доменов и IP
-│       ├── youtube/
-│       ├── discord/
-│       ├── discord-voice/
-│       ├── twitch/
-│       └── telegram/
-├── logs/                   # Ротируемые журналы событий (app.log)
-├── SHA256SUMS.txt          # Контрольные суммы файлов дистрибутива
-└── *.cmd                   # Скрипты управления в один клик
-```
+## Сборка и тесты
 
----
-
-## Сборка из исходников
-
-Для сборки требуются **Rust >= 1.74** (MSVC toolchain на Windows) и **Windows SDK**:
+Нужен Rust toolchain с linker (на Windows — MSVC Build Tools и Windows SDK).
+Проверка выполнена на Rust 1.98.1; заявленный MSRV 1.74 отдельно не проверен.
+Первой сборке нужен доступ к Cargo registry или заранее заполненный cache.
+Зависимости зафиксированы в Cargo.lock; vendoring в этом checkout не настроен.
 
 ```powershell
-# Сборка проекта без доступа к сети (все зависимости зафиксированы в vendor)
-cargo build --release --offline
-
-# Запуск всех 100+ unit- и контрактных тестов
-cargo test --offline
-cargo test -p windivert-adapter --offline
+cargo fmt --all -- --check
+cargo build --workspace --all-targets --locked
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo build --release --locked
 ```
 
----
+Для offline-сборки при наличии cache добавьте `--offline`.
+Нужные локальные файлы драйвера: `WinDivert/WinDivert.dll` и
+`WinDivert/WinDivert64.sys` рядом с exe. Приложение их не скачивает.
+Наличие/подпись SYS не доказывает, что драйвер разрешён системой конкретного пользователя.
 
-## Безопасность и модель угроз
+## Ограничения и документы
 
-- **CWE-428 (Unquoted Service Path)**: путь к исполняемому файлу службы всегда строго экранируется двойными кавычками (`"C:\path\to\dpi-bypass.exe" service run`).
-- **Чистое удаление**: при удалении службы (`service remove`) процесс завершается и удаляется из SCM. Никаких неудаляемых драйверов, задач планировщика или ключей автозагрузки в реестре.
-- **Fail-Safe**: при переполнении очереди потоков или неизвестных протоколах пакеты передаются неизменёнными без сбоя соединений.
-- **Аудит безопасности**: подробности см. в [docs/security-review.md](docs/security-review.md) и [docs/threat-model.md](docs/threat-model.md).
+Нет гарантии нулевого overhead, обхода любого DPI или работы всех приложений.
+Нет TLS reassembly/ECH decryption; flow budget ещё не учитывает TCP sequence ranges.
+Служба поддерживает SCM start/stop, но её startup readiness и установка в защищённый
+каталог требуют дальнейшей проверки; этот кандидат предназначен для foreground-теста.
+Нет телеметрии, чтения browser DB/Discord tokens и изменений firewall/Defender.
 
----
-
-## Лицензия
-
-Проект распространяется под лицензией [MIT](LICENSE).
-Оригинальный драйвер WinDivert лицензирован под GNU LGPLv3 / GPLv2.
+[Исходный аудит de3ab0f](docs/audit-2026-09-15.md) и
+[исправления кандидата](docs/fixes-1.0.5-rc.1.md).
+Лицензия приложения MIT; сторонний WinDivert имеет собственные лицензионные условия.

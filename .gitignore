@@ -7,3 +7,5 @@
 !/run/logs/.gitkeep
 .idea/
 .vscode/
+
+/artifacts/

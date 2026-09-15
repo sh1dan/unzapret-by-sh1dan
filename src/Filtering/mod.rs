@@ -1,11 +1,16 @@
 use crate::core::PacketContext;
 
-pub mod list;
 pub mod engine;
+pub mod list;
 pub use engine::{FilterEngine, TargetPreset};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FilterDecision { Allow, Exclude, NoMatch, Unknown }
+pub enum FilterDecision {
+    Allow,
+    Exclude,
+    NoMatch,
+    Unknown,
+}
 
 /// Exclusion always wins. Unknown classification never authorizes a strategy.
 pub trait DestinationFilter {
@@ -20,4 +25,3 @@ impl DestinationFilter for DenyAll {
         FilterDecision::NoMatch
     }
 }
-

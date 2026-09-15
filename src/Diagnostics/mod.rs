@@ -2,7 +2,12 @@ pub mod engine;
 pub mod logger;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CheckStatus { Ok, Failed, Unsupported, NotRun }
+pub enum CheckStatus {
+    Ok,
+    Failed,
+    Unsupported,
+    NotRun,
+}
 
 pub struct CheckResult {
     pub name: &'static str,
@@ -17,10 +22,16 @@ pub trait Diagnostics {
 }
 
 pub const PLANNED_CHECKS: &[&str] = &[
-    "Administrator privileges", "WinDivert availability",
-    "DNS / IPv4 / IPv6", "YouTube HTTPS", "Discord HTTPS",
-    "QUIC", "Discord voice prerequisites", "Proxy / VPN settings",
-    "Packet-filter drivers", "Windows service",
+    "Administrator privileges",
+    "WinDivert availability",
+    "DNS / IPv4 / IPv6",
+    "YouTube HTTPS",
+    "Discord HTTPS",
+    "QUIC",
+    "Discord voice prerequisites",
+    "Proxy / VPN settings",
+    "Packet-filter drivers",
+    "Windows service",
 ];
 
 pub fn run_diagnostics() -> (u8, String) {

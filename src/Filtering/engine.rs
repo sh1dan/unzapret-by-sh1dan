@@ -17,9 +17,9 @@ use crate::core::{PacketContext, Transport};
 /// One target preset (youtube, discord, custom, …).
 pub struct TargetPreset {
     pub allow_domains: Vec<DomainEntry>,
-    pub allow_ips:     Vec<IpEntry>,
-    pub tcp_ports:     Vec<u16>,
-    pub udp_ports:     Vec<u16>,
+    pub allow_ips: Vec<IpEntry>,
+    pub tcp_ports: Vec<u16>,
+    pub udp_ports: Vec<u16>,
 }
 
 impl TargetPreset {
@@ -33,16 +33,16 @@ impl TargetPreset {
 
     /// Returns true if the destination IP is in the allow list AND the port matches.
     pub fn ip_allow(&self, ctx: &PacketContext<'_>) -> bool {
-        self.port_matches(ctx)
-            && self.allow_ips.iter().any(|e| e.contains(&ctx.destination))
+        self.port_matches(ctx) && self.allow_ips.iter().any(|e| e.contains(&ctx.destination))
     }
 
     /// Returns true if the SNI is visible, matches a domain entry AND the port matches.
     pub fn domain_allow(&self, ctx: &PacketContext<'_>) -> bool {
-        let Some(sni) = ctx.server_name else { return false; };
+        let Some(sni) = ctx.server_name else {
+            return false;
+        };
         let sni_lower = sni.to_ascii_lowercase();
-        self.port_matches(ctx)
-            && self.allow_domains.iter().any(|e| e.matches(&sni_lower))
+        self.port_matches(ctx) && self.allow_domains.iter().any(|e| e.matches(&sni_lower))
     }
 
     /// Evaluates if context is allowed by this preset.
@@ -56,22 +56,14 @@ impl TargetPreset {
         if self.ip_allow(ctx) {
             return true;
         }
-        // Dedicated UDP port profile with dynamic endpoints (e.g. Discord Voice RTC)
-        if ctx.transport == Transport::Udp && self.allow_domains.is_empty() && self.allow_ips.is_empty() && !self.udp_ports.is_empty() {
-            return true;
-        }
-        // Explicit STUN signaling packet on preset port
-        if ctx.transport == Transport::Udp && ctx.initial == crate::core::InitialMetadata::Stun {
-            return true;
-        }
         false
     }
 }
 
 pub struct FilterEngine {
-    pub exclude_ips:     Vec<IpEntry>,
+    pub exclude_ips: Vec<IpEntry>,
     pub exclude_domains: Vec<DomainEntry>,
-    pub presets:         Vec<TargetPreset>,
+    pub presets: Vec<TargetPreset>,
 }
 
 fn format_port_clauses(proto: &str, ports: &std::collections::BTreeSet<u16>) -> Vec<String> {
@@ -88,13 +80,16 @@ fn format_port_clauses(proto: &str, ports: &std::collections::BTreeSet<u16>) -> 
         }
         ranges.push((port, port));
     }
-    ranges.into_iter().map(|(start, end)| {
-        if start == end {
-            format!("{proto}.DstPort == {start}")
-        } else {
-            format!("({proto}.DstPort >= {start} and {proto}.DstPort <= {end})")
-        }
-    }).collect()
+    ranges
+        .into_iter()
+        .map(|(start, end)| {
+            if start == end {
+                format!("{proto}.DstPort == {start}")
+            } else {
+                format!("({proto}.DstPort >= {start} and {proto}.DstPort <= {end})")
+            }
+        })
+        .collect()
 }
 
 impl FilterEngine {
@@ -103,7 +98,11 @@ impl FilterEngine {
         exclude_domains: Vec<DomainEntry>,
         presets: Vec<TargetPreset>,
     ) -> Self {
-        Self { exclude_ips, exclude_domains, presets }
+        Self {
+            exclude_ips,
+            exclude_domains,
+            presets,
+        }
     }
 
     pub fn build_windivert_filter(&self) -> String {
@@ -120,13 +119,8 @@ impl FilterEngine {
             }
         }
 
-        // Fallback default ports if no targets enabled
-        if tcp_ports.is_empty() {
-            tcp_ports.insert(80);
-            tcp_ports.insert(443);
-        }
-        if udp_ports.is_empty() {
-            udp_ports.insert(443);
+        if tcp_ports.is_empty() && udp_ports.is_empty() {
+            return "false".into();
         }
 
         let mut transport_clauses = Vec::new();
@@ -139,14 +133,21 @@ impl FilterEngine {
             transport_clauses.push(format!("(udp and ({}))", udp_clauses.join(" or ")));
         }
 
-        format!("outbound and !loopback and !impostor and ({})", transport_clauses.join(" or "))
+        format!(
+            "outbound and !loopback and !impostor and ({})",
+            transport_clauses.join(" or ")
+        )
     }
 }
 
 impl super::DestinationFilter for FilterEngine {
     fn evaluate(&self, ctx: &PacketContext<'_>) -> FilterDecision {
         // Step 2: exclude by IP.
-        if self.exclude_ips.iter().any(|e| e.contains(&ctx.destination)) {
+        if self
+            .exclude_ips
+            .iter()
+            .any(|e| e.contains(&ctx.destination))
+        {
             return FilterDecision::Exclude;
         }
 
@@ -161,11 +162,7 @@ impl super::DestinationFilter for FilterEngine {
                 }
                 // Domain exclusions are configured but we can't see the SNI →
                 // for TCP we cannot guarantee the exclusion, so block modification.
-                None => {
-                    if ctx.transport == Transport::Tcp {
-                        return FilterDecision::Unknown;
-                    }
-                }
+                None => return FilterDecision::Unknown,
             }
         }
 
@@ -180,15 +177,17 @@ impl super::DestinationFilter for FilterEngine {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
+    use super::super::{DestinationFilter, FilterDecision};
     use super::*;
     use crate::core::{InitialMetadata, Transport};
-    use super::super::{DestinationFilter, FilterDecision};
 
     fn make_ctx<'a>(
-        dst: &str, port: u16, transport: Transport, sni: Option<&'a str>,
+        dst: &str,
+        port: u16,
+        transport: Transport,
+        sni: Option<&'a str>,
     ) -> PacketContext<'a> {
         PacketContext {
             packet: &[],

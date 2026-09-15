@@ -1,7 +1,7 @@
 //! Combined / Auto bypass strategy (Flowseal / Zapret profile).
 //! Handles both TCP (Split-TCP) and UDP (Fake STUN / Discord Voice & QUIC Desync).
 
-use super::{Strategy, ProcessResult, FakeUdpType};
+use super::{FakeUdpType, ProcessResult, Strategy};
 use crate::core::{InitialMetadata, PacketContext, Transport};
 use crate::filtering::FilterDecision;
 
@@ -39,9 +39,11 @@ impl Strategy for AutoBypass {
             Transport::Tcp => true,
             Transport::Udp => {
                 let port = context.destination_port;
-                let is_voice_port = (19294..=19344).contains(&port) || (50000..=50100).contains(&port);
+                let is_voice_port =
+                    (19294..=19344).contains(&port) || (50000..=50100).contains(&port);
                 let is_stun = context.initial == InitialMetadata::Stun;
-                let is_quic = matches!(context.initial, InitialMetadata::QuicInitial { .. }) || port == 443;
+                let is_quic =
+                    matches!(context.initial, InitialMetadata::QuicInitial { .. }) || port == 443;
                 is_voice_port || is_stun || is_quic
             }
         }
@@ -57,7 +59,8 @@ impl Strategy for AutoBypass {
             },
             Transport::Udp => {
                 let port = context.destination_port;
-                let is_voice_port = (19294..=19344).contains(&port) || (50000..=50100).contains(&port);
+                let is_voice_port =
+                    (19294..=19344).contains(&port) || (50000..=50100).contains(&port);
                 let is_stun = context.initial == InitialMetadata::Stun;
                 if is_voice_port || is_stun {
                     ProcessResult::FakeUdp {
@@ -92,7 +95,10 @@ mod tests {
             initial_payload: true,
             filter: FilterDecision::Allow,
         };
-        assert_eq!(strat.process(&tcp_ctx), ProcessResult::SplitTcp { payload_offset: 2 });
+        assert_eq!(
+            strat.process(&tcp_ctx),
+            ProcessResult::SplitTcp { payload_offset: 2 }
+        );
 
         let udp_voice_ctx = PacketContext {
             packet: &[],
@@ -104,9 +110,12 @@ mod tests {
             initial_payload: true,
             filter: FilterDecision::Allow,
         };
-        assert_eq!(strat.process(&udp_voice_ctx), ProcessResult::FakeUdp {
-            payload_type: FakeUdpType::DiscordVoice,
-            repeats: 6,
-        });
+        assert_eq!(
+            strat.process(&udp_voice_ctx),
+            ProcessResult::FakeUdp {
+                payload_type: FakeUdpType::DiscordVoice,
+                repeats: 6,
+            }
+        );
     }
 }

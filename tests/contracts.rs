@@ -1,27 +1,44 @@
-use std::sync::atomic::AtomicBool;
 use local_dpi_bypass::{cli, core::*, filtering::*, service::*, strategies::*};
+use std::sync::atomic::AtomicBool;
 
 fn context(filter: FilterDecision) -> PacketContext<'static> {
     PacketContext {
-        packet: &[], destination: "192.0.2.1".parse().unwrap(),
-        destination_port: 443, transport: Transport::Tcp,
-        server_name: Some("example.invalid"), initial: InitialMetadata::Unknown,
-        initial_payload: true, filter,
+        packet: &[],
+        destination: "192.0.2.1".parse().unwrap(),
+        destination_port: 443,
+        transport: Transport::Tcp,
+        server_name: Some("example.invalid"),
+        initial: InitialMetadata::Unknown,
+        initial_payload: true,
+        filter,
     }
 }
 
 struct MustNotRun;
 impl Strategy for MustNotRun {
-    fn name(&self) -> &'static str { "test" }
-    fn matches(&self, _: &PacketContext<'_>) -> bool { panic!("unauthorized matching") }
-    fn process(&self, _: &PacketContext<'_>) -> ProcessResult { panic!("unauthorized strategy") }
+    fn name(&self) -> &'static str {
+        "test"
+    }
+    fn matches(&self, _: &PacketContext<'_>) -> bool {
+        panic!("unauthorized matching")
+    }
+    fn process(&self, _: &PacketContext<'_>) -> ProcessResult {
+        panic!("unauthorized strategy")
+    }
 }
 
 #[test]
 fn excluded_unknown_and_unmatched_never_reach_strategy() {
-    for decision in [FilterDecision::Exclude, FilterDecision::Unknown, FilterDecision::NoMatch] {
+    for decision in [
+        FilterDecision::Exclude,
+        FilterDecision::Unknown,
+        FilterDecision::NoMatch,
+    ] {
         for mode in [RunMode::Active, RunMode::DryRun] {
-            assert_eq!(evaluate(&MustNotRun, &context(decision), mode), ProcessResult::PassThrough);
+            assert_eq!(
+                evaluate(&MustNotRun, &context(decision), mode),
+                ProcessResult::PassThrough
+            );
         }
     }
 }
@@ -30,13 +47,20 @@ fn excluded_unknown_and_unmatched_never_reach_strategy() {
 fn later_payload_never_reaches_strategy() {
     let mut ctx = context(FilterDecision::Allow);
     ctx.initial_payload = false;
-    assert_eq!(evaluate(&MustNotRun, &ctx, RunMode::Active), ProcessResult::PassThrough);
+    assert_eq!(
+        evaluate(&MustNotRun, &ctx, RunMode::Active),
+        ProcessResult::PassThrough
+    );
 }
 
 struct PlannedSplit;
 impl Strategy for PlannedSplit {
-    fn name(&self) -> &'static str { "test-split" }
-    fn matches(&self, _: &PacketContext<'_>) -> bool { true }
+    fn name(&self) -> &'static str {
+        "test-split"
+    }
+    fn matches(&self, _: &PacketContext<'_>) -> bool {
+        true
+    }
     fn process(&self, _: &PacketContext<'_>) -> ProcessResult {
         ProcessResult::SplitTcp { payload_offset: 1 }
     }
@@ -45,16 +69,28 @@ impl Strategy for PlannedSplit {
 #[test]
 fn dry_run_suppresses_modification_plan() {
     let ctx = context(FilterDecision::Allow);
-    assert_eq!(evaluate(&PlannedSplit, &ctx, RunMode::DryRun), ProcessResult::WouldModify);
-    assert_eq!(evaluate(&PlannedSplit, &ctx, RunMode::Active), ProcessResult::SplitTcp { payload_offset: 1 });
-    assert_eq!(evaluate(&PassThrough, &ctx, RunMode::DryRun), ProcessResult::PassThrough);
+    assert_eq!(
+        evaluate(&PlannedSplit, &ctx, RunMode::DryRun),
+        ProcessResult::WouldModify
+    );
+    assert_eq!(
+        evaluate(&PlannedSplit, &ctx, RunMode::Active),
+        ProcessResult::SplitTcp { payload_offset: 1 }
+    );
+    assert_eq!(
+        evaluate(&PassThrough, &ctx, RunMode::DryRun),
+        ProcessResult::PassThrough
+    );
 }
 
 #[test]
 fn unavailable_engine_does_not_claim_success() {
     let mut engine = UnavailableEngine;
     for mode in [RunMode::Active, RunMode::DryRun] {
-        assert_eq!(engine.run(mode, &AtomicBool::new(false)), Err(EngineError::NotImplemented));
+        assert_eq!(
+            engine.run(mode, &AtomicBool::new(false)),
+            Err(EngineError::NotImplemented)
+        );
     }
     assert_eq!(engine.counters(), Counters::default());
 }
@@ -85,10 +121,15 @@ fn safe_defaults_and_deny_all_filter() {
     assert!(!config.targets.discord_voice);
     assert!(!config.targets.custom);
     assert_eq!(config.strategy, "pass-through");
-    assert_eq!(DenyAll.evaluate(&context(FilterDecision::Allow)), FilterDecision::NoMatch);
+    assert_eq!(
+        DenyAll.evaluate(&context(FilterDecision::Allow)),
+        FilterDecision::NoMatch
+    );
 }
 
-fn core_config() -> config::Config { config::Config::default() }
+fn core_config() -> config::Config {
+    config::Config::default()
+}
 
 // ── Phase 2: parser tests ────────────────────────────────────────────────────
 
@@ -97,16 +138,26 @@ use local_dpi_bypass::core::parser::{self, ParseError};
 /// Minimal valid IPv4/TCP packet (20-byte IP header + 20-byte TCP header, no payload).
 fn ipv4_tcp_packet() -> Vec<u8> {
     let mut p = vec![0u8; 40];
-    p[0] = 0x45;           // version=4, IHL=5
-    p[2] = 0x00; p[3] = 40; // total length = 40
-    p[6] = 0; p[7] = 0;   // no fragment flags
-    p[9] = 6;              // protocol TCP
-    p[12] = 192; p[13] = 0; p[14] = 2; p[15] = 1; // src
-    p[16] = 192; p[17] = 0; p[18] = 2; p[19] = 2; // dst
-    // TCP header at offset 20
-    p[20] = 0; p[21] = 80;  // src port 80
-    p[22] = 0x01; p[23] = 0xbb; // dst port 443
-    // data offset = 5 (20 bytes), at byte 32
+    p[0] = 0x45; // version=4, IHL=5
+    p[2] = 0x00;
+    p[3] = 40; // total length = 40
+    p[6] = 0;
+    p[7] = 0; // no fragment flags
+    p[9] = 6; // protocol TCP
+    p[12] = 192;
+    p[13] = 0;
+    p[14] = 2;
+    p[15] = 1; // src
+    p[16] = 192;
+    p[17] = 0;
+    p[18] = 2;
+    p[19] = 2; // dst
+               // TCP header at offset 20
+    p[20] = 0;
+    p[21] = 80; // src port 80
+    p[22] = 0x01;
+    p[23] = 0xbb; // dst port 443
+                  // data offset = 5 (20 bytes), at byte 32
     p[32] = 5 << 4;
     p
 }
@@ -115,14 +166,24 @@ fn ipv4_tcp_packet() -> Vec<u8> {
 fn ipv4_udp_packet() -> Vec<u8> {
     let mut p = vec![0u8; 28];
     p[0] = 0x45;
-    p[2] = 0; p[3] = 28;
+    p[2] = 0;
+    p[3] = 28;
     p[9] = 17; // UDP
-    p[12] = 10; p[13] = 0; p[14] = 0; p[15] = 1;
-    p[16] = 10; p[17] = 0; p[18] = 0; p[19] = 2;
+    p[12] = 10;
+    p[13] = 0;
+    p[14] = 0;
+    p[15] = 1;
+    p[16] = 10;
+    p[17] = 0;
+    p[18] = 0;
+    p[19] = 2;
     // UDP: src port, dst port, length, checksum (8 bytes)
-    p[20] = 0; p[21] = 53;   // src port 53
-    p[22] = 0; p[23] = 53;   // dst port 53
-    p[24] = 0; p[25] = 8;    // length = 8 (header only)
+    p[20] = 0;
+    p[21] = 53; // src port 53
+    p[22] = 0;
+    p[23] = 53; // dst port 53
+    p[24] = 0;
+    p[25] = 8; // length = 8 (header only)
     p
 }
 
@@ -134,7 +195,13 @@ fn parser_accepts_minimal_ipv4_tcp() {
     assert_eq!(m.header_length, 20);
     assert_eq!(m.total_length, 40);
     assert_eq!(m.protocol, 6);
-    assert!(matches!(m.transport, parser::TransportMetadata::Tcp { destination_port: 443, .. }));
+    assert!(matches!(
+        m.transport,
+        parser::TransportMetadata::Tcp {
+            destination_port: 443,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -143,7 +210,10 @@ fn parser_accepts_minimal_ipv4_udp() {
     let m = parser::parse(&pkt).expect("should parse");
     assert_eq!(m.version, 4);
     assert_eq!(m.protocol, 17);
-    assert!(matches!(m.transport, parser::TransportMetadata::Udp { length: 8, .. }));
+    assert!(matches!(
+        m.transport,
+        parser::TransportMetadata::Udp { length: 8, .. }
+    ));
 }
 
 #[test]
@@ -166,7 +236,8 @@ fn parser_rejects_ipv4_ihl_less_than_5() {
 #[test]
 fn parser_rejects_ipv4_total_length_mismatch() {
     let mut p = ipv4_tcp_packet();
-    p[2] = 0; p[3] = 39; // total = 39 ≠ 40
+    p[2] = 0;
+    p[3] = 39; // total = 39 ≠ 40
     assert!(parser::parse(&p).is_err());
 }
 
@@ -187,7 +258,8 @@ fn parser_rejects_unknown_version() {
 #[test]
 fn parser_rejects_udp_length_mismatch() {
     let mut p = ipv4_udp_packet();
-    p[24] = 0; p[25] = 9; // UDP length = 9 ≠ actual payload 8
+    p[24] = 0;
+    p[25] = 9; // UDP length = 9 ≠ actual payload 8
     assert!(parser::parse(&p).is_err());
 }
 
@@ -267,7 +339,10 @@ fn phase2_config_rejects_loopback_ip() {
 fn phase2_config_filter_disabled_returns_error() {
     let toml = "[phase2_capture]\nenabled = false\ndestination_ips = []\ntcp_ports = [443]\nudp_ports = []\n";
     let cfg = Phase2Config::parse(toml).unwrap();
-    assert!(cfg.filter().is_err(), "disabled config must not produce a filter");
+    assert!(
+        cfg.filter().is_err(),
+        "disabled config must not produce a filter"
+    );
 }
 
 #[test]
@@ -310,39 +385,54 @@ struct MockCapture {
 
 impl MockCapture {
     fn new(mode: RunMode, events: Vec<Result<ReceiveEvent<()>, CaptureError>>) -> Self {
-        Self { events: events.into(), mode, send_count: 0, closed: false, shut_down: false }
+        Self {
+            events: events.into(),
+            mode,
+            send_count: 0,
+            closed: false,
+            shut_down: false,
+        }
     }
 }
 
 impl PacketCapture for MockCapture {
     type Address = ();
-    fn mode(&self) -> RunMode { self.mode }
+    fn mode(&self) -> RunMode {
+        self.mode
+    }
     fn receive(&mut self) -> Result<ReceiveEvent<()>, CaptureError> {
         self.events.pop_front().unwrap_or(Ok(ReceiveEvent::End))
     }
     fn send(&mut self, _: &CapturedPacket<()>) -> Result<(), CaptureError> {
-        self.send_count += 1; Ok(())
+        self.send_count += 1;
+        Ok(())
     }
-    fn shutdown_receive(&mut self) -> Result<(), CaptureError> { self.shut_down = true; Ok(()) }
-    fn close(&mut self) -> Result<(), CaptureError> { self.closed = true; Ok(()) }
+    fn shutdown_receive(&mut self) -> Result<(), CaptureError> {
+        self.shut_down = true;
+        Ok(())
+    }
+    fn close(&mut self) -> Result<(), CaptureError> {
+        self.closed = true;
+        Ok(())
+    }
 }
 
-fn tcp_pkt() -> Vec<u8> { ipv4_tcp_packet() }
+fn tcp_pkt() -> Vec<u8> {
+    ipv4_tcp_packet()
+}
 
 #[test]
 fn pipeline_pass_through_active_counts_and_reinserts() {
     use local_dpi_bypass::core::pipeline::PassThroughEngine;
     use local_dpi_bypass::core::PacketEngine as _;
 
-    let packet = CapturedPacket { bytes: tcp_pkt(), address: () };
-    let events = vec![
-        Ok(ReceiveEvent::Packet(packet)),
-        Ok(ReceiveEvent::End),
-    ];
-    let mut engine = PassThroughEngine::new_passthrough(
-        MockCapture::new(RunMode::Active, events),
-        |_| {},
-    );
+    let packet = CapturedPacket {
+        bytes: tcp_pkt(),
+        address: (),
+    };
+    let events = vec![Ok(ReceiveEvent::Packet(packet)), Ok(ReceiveEvent::End)];
+    let mut engine =
+        PassThroughEngine::new_passthrough(MockCapture::new(RunMode::Active, events), |_| {});
     // Pre-signal stop so shutdown_receive() is called before the Packet/End sequence.
     // This makes ReceiveEvent::End a graceful exit (stopping.is_some() == true).
     let stop = AtomicBool::new(true);
@@ -360,15 +450,13 @@ fn pipeline_dry_run_does_not_send() {
     use local_dpi_bypass::core::pipeline::PassThroughEngine;
     use local_dpi_bypass::core::PacketEngine as _;
 
-    let packet = CapturedPacket { bytes: tcp_pkt(), address: () };
-    let events = vec![
-        Ok(ReceiveEvent::Packet(packet)),
-        Ok(ReceiveEvent::End),
-    ];
-    let mut engine = PassThroughEngine::new_passthrough(
-        MockCapture::new(RunMode::DryRun, events),
-        |_| {},
-    );
+    let packet = CapturedPacket {
+        bytes: tcp_pkt(),
+        address: (),
+    };
+    let events = vec![Ok(ReceiveEvent::Packet(packet)), Ok(ReceiveEvent::End)];
+    let mut engine =
+        PassThroughEngine::new_passthrough(MockCapture::new(RunMode::DryRun, events), |_| {});
     let stop = AtomicBool::new(true); // pre-signal for graceful End
     let counters = engine.run(RunMode::DryRun, &stop).expect("should succeed");
     assert_eq!(counters.processed, 1);
@@ -382,21 +470,25 @@ fn pipeline_counts_malformed_and_unsupported() {
     use local_dpi_bypass::core::PacketEngine as _;
 
     // malformed: empty payload
-    let malformed = CapturedPacket { bytes: vec![0xAB], address: () };
+    let malformed = CapturedPacket {
+        bytes: vec![0xAB],
+        address: (),
+    };
     // unsupported: IPv4 with fragment flag
     let mut frag = ipv4_tcp_packet();
     frag[6] = 0x20;
-    let unsupported = CapturedPacket { bytes: frag, address: () };
+    let unsupported = CapturedPacket {
+        bytes: frag,
+        address: (),
+    };
 
     let events = vec![
         Ok(ReceiveEvent::Packet(malformed)),
         Ok(ReceiveEvent::Packet(unsupported)),
         Ok(ReceiveEvent::End),
     ];
-    let mut engine = PassThroughEngine::new_passthrough(
-        MockCapture::new(RunMode::DryRun, events),
-        |_| {},
-    );
+    let mut engine =
+        PassThroughEngine::new_passthrough(MockCapture::new(RunMode::DryRun, events), |_| {});
     let stop = AtomicBool::new(true); // pre-signal for graceful End
     let counters = engine.run(RunMode::DryRun, &stop).unwrap();
     assert_eq!(counters.processed, 2);
@@ -414,10 +506,8 @@ fn pipeline_idle_events_are_not_counted_as_processed() {
         Ok(ReceiveEvent::Idle),
         Ok(ReceiveEvent::End),
     ];
-    let mut engine = PassThroughEngine::new_passthrough(
-        MockCapture::new(RunMode::DryRun, events),
-        |_| {},
-    );
+    let mut engine =
+        PassThroughEngine::new_passthrough(MockCapture::new(RunMode::DryRun, events), |_| {});
     let stop = AtomicBool::new(true); // pre-signal for graceful End
     let counters = engine.run(RunMode::DryRun, &stop).unwrap();
     assert_eq!(counters.processed, 0);
@@ -425,8 +515,8 @@ fn pipeline_idle_events_are_not_counted_as_processed() {
 
 // ── Phase 4: TCP Segmentation Strategy & Active Engine contracts ─────────────
 
-use std::rc::Rc;
 use std::cell::RefCell;
+use std::rc::Rc;
 
 struct RecordingCapture {
     events: std::collections::VecDeque<Result<ReceiveEvent<()>, CaptureError>>,
@@ -435,14 +525,24 @@ struct RecordingCapture {
 }
 
 impl RecordingCapture {
-    fn new(mode: RunMode, events: Vec<Result<ReceiveEvent<()>, CaptureError>>, sent: Rc<RefCell<Vec<Vec<u8>>>>) -> Self {
-        Self { events: events.into(), mode, sent }
+    fn new(
+        mode: RunMode,
+        events: Vec<Result<ReceiveEvent<()>, CaptureError>>,
+        sent: Rc<RefCell<Vec<Vec<u8>>>>,
+    ) -> Self {
+        Self {
+            events: events.into(),
+            mode,
+            sent,
+        }
     }
 }
 
 impl PacketCapture for RecordingCapture {
     type Address = ();
-    fn mode(&self) -> RunMode { self.mode }
+    fn mode(&self) -> RunMode {
+        self.mode
+    }
     fn receive(&mut self) -> Result<ReceiveEvent<()>, CaptureError> {
         self.events.pop_front().unwrap_or(Ok(ReceiveEvent::End))
     }
@@ -450,8 +550,12 @@ impl PacketCapture for RecordingCapture {
         self.sent.borrow_mut().push(pkt.bytes.clone());
         Ok(())
     }
-    fn shutdown_receive(&mut self) -> Result<(), CaptureError> { Ok(()) }
-    fn close(&mut self) -> Result<(), CaptureError> { Ok(()) }
+    fn shutdown_receive(&mut self) -> Result<(), CaptureError> {
+        Ok(())
+    }
+    fn close(&mut self) -> Result<(), CaptureError> {
+        Ok(())
+    }
 }
 
 fn tcp_packet_with_payload(dst_ip: std::net::Ipv4Addr, dst_port: u16, payload: &[u8]) -> Vec<u8> {
@@ -490,12 +594,12 @@ fn tcp_packet_with_payload(dst_ip: std::net::Ipv4Addr, dst_port: u16, payload: &
 
 #[test]
 fn pipeline_split_tcp_active_splits_allowed_initial_packet() {
+    use local_dpi_bypass::core::flow::FlowTable;
     use local_dpi_bypass::core::pipeline::PassThroughEngine;
     use local_dpi_bypass::core::PacketEngine as _;
-    use local_dpi_bypass::filtering::FilterEngine;
     use local_dpi_bypass::filtering::engine::TargetPreset;
     use local_dpi_bypass::filtering::list::IpEntry;
-    use local_dpi_bypass::core::flow::FlowTable;
+    use local_dpi_bypass::filtering::FilterEngine;
     use local_dpi_bypass::strategies::SplitTcp;
 
     let target_ip = std::net::Ipv4Addr::new(93, 184, 216, 34);
@@ -504,7 +608,10 @@ fn pipeline_split_tcp_active_splits_allowed_initial_packet() {
 
     let sent = Rc::new(RefCell::new(Vec::new()));
     let events = vec![
-        Ok(ReceiveEvent::Packet(CapturedPacket { bytes: original.clone(), address: () })),
+        Ok(ReceiveEvent::Packet(CapturedPacket {
+            bytes: original.clone(),
+            address: (),
+        })),
         Ok(ReceiveEvent::End),
     ];
     let capture = RecordingCapture::new(RunMode::Active, events, Rc::clone(&sent));
@@ -525,10 +632,15 @@ fn pipeline_split_tcp_active_splits_allowed_initial_packet() {
 
     let mut engine = PassThroughEngine::new(capture, filter_engine, flow_table, strategy, |_| {});
     let stop = AtomicBool::new(true);
-    let counters = engine.run(RunMode::Active, &stop).expect("active engine should succeed");
+    let counters = engine
+        .run(RunMode::Active, &stop)
+        .expect("active engine should succeed");
 
     assert_eq!(counters.processed, 1);
-    assert_eq!(counters.modified, 1, "initial allowed payload must be modified");
+    assert_eq!(
+        counters.modified, 1,
+        "initial allowed payload must be modified"
+    );
     assert_eq!(counters.reinserted, 2, "must reinject exactly two segments");
 
     let sent_packets = sent.borrow();
@@ -541,7 +653,11 @@ fn pipeline_split_tcp_active_splits_allowed_initial_packet() {
     let p2 = &seg2[40..];
     assert_eq!(p1, &payload[..2]);
     assert_eq!(p2, &payload[2..]);
-    assert_eq!([p1, p2].concat(), payload, "concatenated payloads must equal original");
+    assert_eq!(
+        [p1, p2].concat(),
+        payload,
+        "concatenated payloads must equal original"
+    );
 
     let seq1 = u32::from_be_bytes([seg1[24], seg1[25], seg1[26], seg1[27]]);
     let seq2 = u32::from_be_bytes([seg2[24], seg2[25], seg2[26], seg2[27]]);
@@ -551,12 +667,12 @@ fn pipeline_split_tcp_active_splits_allowed_initial_packet() {
 
 #[test]
 fn pipeline_split_tcp_dry_run_suppresses_split_send() {
+    use local_dpi_bypass::core::flow::FlowTable;
     use local_dpi_bypass::core::pipeline::PassThroughEngine;
     use local_dpi_bypass::core::PacketEngine as _;
-    use local_dpi_bypass::filtering::FilterEngine;
     use local_dpi_bypass::filtering::engine::TargetPreset;
     use local_dpi_bypass::filtering::list::IpEntry;
-    use local_dpi_bypass::core::flow::FlowTable;
+    use local_dpi_bypass::filtering::FilterEngine;
     use local_dpi_bypass::strategies::SplitTcp;
 
     let target_ip = std::net::Ipv4Addr::new(93, 184, 216, 34);
@@ -564,7 +680,10 @@ fn pipeline_split_tcp_dry_run_suppresses_split_send() {
 
     let sent = Rc::new(RefCell::new(Vec::new()));
     let events = vec![
-        Ok(ReceiveEvent::Packet(CapturedPacket { bytes: original, address: () })),
+        Ok(ReceiveEvent::Packet(CapturedPacket {
+            bytes: original,
+            address: (),
+        })),
         Ok(ReceiveEvent::End),
     ];
     let capture = RecordingCapture::new(RunMode::DryRun, events, Rc::clone(&sent));
@@ -581,25 +700,36 @@ fn pipeline_split_tcp_dry_run_suppresses_split_send() {
     );
 
     let mut engine = PassThroughEngine::new(
-        capture, filter_engine, FlowTable::with_defaults(), Box::new(SplitTcp::default()), |_| {},
+        capture,
+        filter_engine,
+        FlowTable::with_defaults(),
+        Box::new(SplitTcp::default()),
+        |_| {},
     );
     let stop = AtomicBool::new(true);
     let counters = engine.run(RunMode::DryRun, &stop).unwrap();
 
     assert_eq!(counters.processed, 1);
-    assert_eq!(counters.modified, 1, "dry-run records would-modify");
-    assert_eq!(counters.reinserted, 0, "dry-run must never send or reinject");
+    assert_eq!(counters.modified, 0, "dry-run never modifies packets");
+    assert_eq!(
+        counters.would_modify, 1,
+        "dry-run records intentions separately"
+    );
+    assert_eq!(
+        counters.reinserted, 0,
+        "dry-run must never send or reinject"
+    );
     assert!(sent.borrow().is_empty());
 }
 
 #[test]
 fn pipeline_split_tcp_excluded_packet_passes_unmodified() {
+    use local_dpi_bypass::core::flow::FlowTable;
     use local_dpi_bypass::core::pipeline::PassThroughEngine;
     use local_dpi_bypass::core::PacketEngine as _;
-    use local_dpi_bypass::filtering::FilterEngine;
     use local_dpi_bypass::filtering::engine::TargetPreset;
     use local_dpi_bypass::filtering::list::IpEntry;
-    use local_dpi_bypass::core::flow::FlowTable;
+    use local_dpi_bypass::filtering::FilterEngine;
     use local_dpi_bypass::strategies::SplitTcp;
 
     let target_ip = std::net::Ipv4Addr::new(93, 184, 216, 34);
@@ -607,7 +737,10 @@ fn pipeline_split_tcp_excluded_packet_passes_unmodified() {
 
     let sent = Rc::new(RefCell::new(Vec::new()));
     let events = vec![
-        Ok(ReceiveEvent::Packet(CapturedPacket { bytes: original.clone(), address: () })),
+        Ok(ReceiveEvent::Packet(CapturedPacket {
+            bytes: original.clone(),
+            address: (),
+        })),
         Ok(ReceiveEvent::End),
     ];
     let capture = RecordingCapture::new(RunMode::Active, events, Rc::clone(&sent));
@@ -625,14 +758,24 @@ fn pipeline_split_tcp_excluded_packet_passes_unmodified() {
     );
 
     let mut engine = PassThroughEngine::new(
-        capture, filter_engine, FlowTable::with_defaults(), Box::new(SplitTcp::default()), |_| {},
+        capture,
+        filter_engine,
+        FlowTable::with_defaults(),
+        Box::new(SplitTcp::default()),
+        |_| {},
     );
     let stop = AtomicBool::new(true);
     let counters = engine.run(RunMode::Active, &stop).unwrap();
 
     assert_eq!(counters.processed, 1);
-    assert_eq!(counters.modified, 0, "excluded traffic must never be modified");
-    assert_eq!(counters.reinserted, 1, "excluded traffic must pass through exactly once");
+    assert_eq!(
+        counters.modified, 0,
+        "excluded traffic must never be modified"
+    );
+    assert_eq!(
+        counters.reinserted, 1,
+        "excluded traffic must pass through exactly once"
+    );
     assert_eq!(sent.borrow()[0], original, "byte-exact pass-through");
 }
 
@@ -640,12 +783,12 @@ fn pipeline_split_tcp_excluded_packet_passes_unmodified() {
 
 #[test]
 fn pipeline_tls_sni_matches_domain_allowlist_preset() {
+    use local_dpi_bypass::core::flow::FlowTable;
     use local_dpi_bypass::core::pipeline::PassThroughEngine;
     use local_dpi_bypass::core::PacketEngine as _;
-    use local_dpi_bypass::filtering::FilterEngine;
     use local_dpi_bypass::filtering::engine::TargetPreset;
     use local_dpi_bypass::filtering::list::DomainEntry;
-    use local_dpi_bypass::core::flow::FlowTable;
+    use local_dpi_bypass::filtering::FilterEngine;
     use local_dpi_bypass::strategies::SplitTcp;
 
     // Create a TLS ClientHello with SNI "twitch.tv"
@@ -656,7 +799,10 @@ fn pipeline_tls_sni_matches_domain_allowlist_preset() {
 
     let sent = Rc::new(RefCell::new(Vec::new()));
     let events = vec![
-        Ok(ReceiveEvent::Packet(CapturedPacket { bytes: original, address: () })),
+        Ok(ReceiveEvent::Packet(CapturedPacket {
+            bytes: original,
+            address: (),
+        })),
         Ok(ReceiveEvent::End),
     ];
     let capture = RecordingCapture::new(RunMode::Active, events, Rc::clone(&sent));
@@ -674,24 +820,34 @@ fn pipeline_tls_sni_matches_domain_allowlist_preset() {
     );
 
     let mut engine = PassThroughEngine::new(
-        capture, filter_engine, FlowTable::with_defaults(), Box::new(SplitTcp::default()), |_| {},
+        capture,
+        filter_engine,
+        FlowTable::with_defaults(),
+        Box::new(SplitTcp::default()),
+        |_| {},
     );
     let stop = AtomicBool::new(true);
     let counters = engine.run(RunMode::Active, &stop).unwrap();
 
     assert_eq!(counters.processed, 1);
-    assert_eq!(counters.modified, 1, "domain matching via extracted SNI must authorize split");
-    assert_eq!(counters.reinserted, 2, "must reinject two segments for twitch.tv");
+    assert_eq!(
+        counters.modified, 1,
+        "domain matching via extracted SNI must authorize split"
+    );
+    assert_eq!(
+        counters.reinserted, 2,
+        "must reinject two segments for twitch.tv"
+    );
 }
 
 #[test]
 fn pipeline_tls_sni_excluded_domain_wins_over_allowed_ip() {
+    use local_dpi_bypass::core::flow::FlowTable;
     use local_dpi_bypass::core::pipeline::PassThroughEngine;
     use local_dpi_bypass::core::PacketEngine as _;
-    use local_dpi_bypass::filtering::FilterEngine;
     use local_dpi_bypass::filtering::engine::TargetPreset;
     use local_dpi_bypass::filtering::list::{DomainEntry, IpEntry};
-    use local_dpi_bypass::core::flow::FlowTable;
+    use local_dpi_bypass::filtering::FilterEngine;
     use local_dpi_bypass::strategies::SplitTcp;
 
     // ClientHello with SNI "t.me" (Telegram)
@@ -701,7 +857,10 @@ fn pipeline_tls_sni_excluded_domain_wins_over_allowed_ip() {
 
     let sent = Rc::new(RefCell::new(Vec::new()));
     let events = vec![
-        Ok(ReceiveEvent::Packet(CapturedPacket { bytes: original.clone(), address: () })),
+        Ok(ReceiveEvent::Packet(CapturedPacket {
+            bytes: original.clone(),
+            address: (),
+        })),
         Ok(ReceiveEvent::End),
     ];
     let capture = RecordingCapture::new(RunMode::Active, events, Rc::clone(&sent));
@@ -719,14 +878,24 @@ fn pipeline_tls_sni_excluded_domain_wins_over_allowed_ip() {
     );
 
     let mut engine = PassThroughEngine::new(
-        capture, filter_engine, FlowTable::with_defaults(), Box::new(SplitTcp::default()), |_| {},
+        capture,
+        filter_engine,
+        FlowTable::with_defaults(),
+        Box::new(SplitTcp::default()),
+        |_| {},
     );
     let stop = AtomicBool::new(true);
     let counters = engine.run(RunMode::Active, &stop).unwrap();
 
     assert_eq!(counters.processed, 1);
-    assert_eq!(counters.modified, 0, "excluded domain must win over allowed IP");
-    assert_eq!(counters.reinserted, 1, "excluded traffic must pass through unmodified");
+    assert_eq!(
+        counters.modified, 0,
+        "excluded domain must win over allowed IP"
+    );
+    assert_eq!(
+        counters.reinserted, 1,
+        "excluded traffic must pass through unmodified"
+    );
     assert_eq!(sent.borrow()[0], original);
 }
 
@@ -762,10 +931,10 @@ fn udp_packet_with_payload(dst_ip: std::net::Ipv4Addr, dst_port: u16, payload: &
 
 #[test]
 fn pipeline_discord_voice_stun_recognized_and_media_unchanged() {
+    use local_dpi_bypass::core::flow::FlowTable;
     use local_dpi_bypass::core::pipeline::PassThroughEngine;
     use local_dpi_bypass::core::PacketEngine as _;
     use local_dpi_bypass::filtering::FilterEngine;
-    use local_dpi_bypass::core::flow::FlowTable;
     use local_dpi_bypass::strategies::SplitTcp;
 
     let rtc_ip = std::net::Ipv4Addr::new(162, 159, 138, 232);
@@ -783,34 +952,53 @@ fn pipeline_discord_voice_stun_recognized_and_media_unchanged() {
 
     let sent = Rc::new(RefCell::new(Vec::new()));
     let events = vec![
-        Ok(ReceiveEvent::Packet(CapturedPacket { bytes: stun_pkt.clone(), address: () })),
-        Ok(ReceiveEvent::Packet(CapturedPacket { bytes: rtp_pkt.clone(), address: () })),
+        Ok(ReceiveEvent::Packet(CapturedPacket {
+            bytes: stun_pkt.clone(),
+            address: (),
+        })),
+        Ok(ReceiveEvent::Packet(CapturedPacket {
+            bytes: rtp_pkt.clone(),
+            address: (),
+        })),
         Ok(ReceiveEvent::End),
     ];
     let capture = RecordingCapture::new(RunMode::Active, events, Rc::clone(&sent));
 
     let filter_engine = FilterEngine::new(vec![], vec![], vec![]);
     let mut engine = PassThroughEngine::new(
-        capture, filter_engine, FlowTable::with_defaults(), Box::new(SplitTcp::default()), |_| {},
+        capture,
+        filter_engine,
+        FlowTable::with_defaults(),
+        Box::new(SplitTcp::default()),
+        |_| {},
     );
     let stop = AtomicBool::new(true);
     let counters = engine.run(RunMode::Active, &stop).unwrap();
 
     assert_eq!(counters.processed, 2);
-    assert_eq!(counters.modified, 0, "voice media streams must NEVER be modified");
-    assert_eq!(counters.reinserted, 2, "both STUN and RTP packets must pass through cleanly");
+    assert_eq!(
+        counters.modified, 0,
+        "voice media streams must NEVER be modified"
+    );
+    assert_eq!(
+        counters.reinserted, 2,
+        "both STUN and RTP packets must pass through cleanly"
+    );
 
     let sent_list = sent.borrow();
     assert_eq!(sent_list[0], stun_pkt, "STUN packet passed through intact");
-    assert_eq!(sent_list[1], rtp_pkt, "RTP voice media passed through intact (media unchanged guarantee)");
+    assert_eq!(
+        sent_list[1], rtp_pkt,
+        "RTP voice media passed through intact (media unchanged guarantee)"
+    );
 }
 
 #[test]
-fn pipeline_auto_bypass_injects_fake_udp_for_discord_voice_stun() {
+fn pipeline_rejects_unlisted_stun_even_for_experimental_strategy() {
+    use local_dpi_bypass::core::flow::FlowTable;
     use local_dpi_bypass::core::pipeline::PassThroughEngine;
     use local_dpi_bypass::core::PacketEngine as _;
     use local_dpi_bypass::filtering::{FilterEngine, TargetPreset};
-    use local_dpi_bypass::core::flow::FlowTable;
     use local_dpi_bypass::strategies::AutoBypass;
 
     let rtc_ip = std::net::Ipv4Addr::new(162, 159, 138, 232);
@@ -821,7 +1009,10 @@ fn pipeline_auto_bypass_injects_fake_udp_for_discord_voice_stun() {
 
     let sent = Rc::new(RefCell::new(Vec::new()));
     let events = vec![
-        Ok(ReceiveEvent::Packet(CapturedPacket { bytes: stun_pkt.clone(), address: () })),
+        Ok(ReceiveEvent::Packet(CapturedPacket {
+            bytes: stun_pkt.clone(),
+            address: (),
+        })),
         Ok(ReceiveEvent::End),
     ];
     let capture = RecordingCapture::new(RunMode::Active, events, Rc::clone(&sent));
@@ -835,30 +1026,29 @@ fn pipeline_auto_bypass_injects_fake_udp_for_discord_voice_stun() {
     };
     let filter_engine = FilterEngine::new(vec![], vec![], vec![voice_preset]);
     let mut engine = PassThroughEngine::new(
-        capture, filter_engine, FlowTable::with_defaults(), Box::new(AutoBypass::default()), |_| {},
+        capture,
+        filter_engine,
+        FlowTable::with_defaults(),
+        Box::new(AutoBypass::default()),
+        |_| {},
     );
     let stop = AtomicBool::new(true);
     let counters = engine.run(RunMode::Active, &stop).unwrap();
 
     assert_eq!(counters.processed, 1);
-    assert_eq!(counters.modified, 1, "STUN packet must be desynced with fake UDP");
-    // 6 fake packets + 1 real packet = 7 reinserted
-    assert_eq!(counters.reinserted, 7, "repeats=6 fake UDP + 1 real packet");
-
+    assert_eq!(
+        counters.modified, 0,
+        "port and STUN framing are not destination authorization"
+    );
+    assert_eq!(counters.reinserted, 1);
     let sent_list = sent.borrow();
-    assert_eq!(sent_list.len(), 7);
-    // The final packet sent must be the real unmodified STUN packet
-    assert_eq!(sent_list[6], stun_pkt);
-    // The first 6 packets must be valid fake UDP packets
-    assert_eq!(sent_list[0].len(), 20 + 8 + 1200);
+    assert_eq!(sent_list.len(), 1);
+    assert_eq!(sent_list[0], stun_pkt);
 }
-
 
 // ── Phase 7: Sequential Strategy Tester contracts ────────────────────────────
 
-use local_dpi_bypass::core::tester::{
-    self, DEFAULT_TARGETS, ProbeStatus, TestVerdict,
-};
+use local_dpi_bypass::core::tester::{self, ProbeStatus, TestVerdict, DEFAULT_TARGETS};
 
 #[test]
 fn phase_seven_cli_test_mock_dispatches_with_zero_code() {
@@ -914,7 +1104,11 @@ fn phase_seven_tester_attribution_rules() {
 
     // 6. DNS error -> INCONCLUSIVE
     assert_eq!(
-        tester::determine_verdict(&ProbeStatus::DnsError("NXDOMAIN".into()), false, "split-tcp"),
+        tester::determine_verdict(
+            &ProbeStatus::DnsError("NXDOMAIN".into()),
+            false,
+            "split-tcp"
+        ),
         TestVerdict::Inconclusive
     );
 }
@@ -938,7 +1132,11 @@ fn phase_seven_tester_honesty_inconclusive_when_not_applied() {
         if r.strategy == "pass-through" {
             assert_eq!(r.result, TestVerdict::Success);
         } else if r.strategy == "split-tcp" {
-            assert_eq!(r.result, TestVerdict::Inconclusive, "unapplied strategy must be INCONCLUSIVE");
+            assert_eq!(
+                r.result,
+                TestVerdict::Inconclusive,
+                "unapplied strategy must be INCONCLUSIVE"
+            );
         }
     }
 }
@@ -957,7 +1155,10 @@ fn phase_seven_tester_profile_restore_preserves_config() {
 
     // Verify config file content on disk is bit-for-bit identical
     let after_content = std::fs::read_to_string(&default_path).expect("read default.toml after");
-    assert_eq!(initial_content, after_content, "config/default.toml must remain unaltered");
+    assert_eq!(
+        initial_content, after_content,
+        "config/default.toml must remain unaltered"
+    );
 }
 
 #[test]
@@ -965,17 +1166,13 @@ fn phase_seven_tester_simulated_prober_suite() {
     let targets = &DEFAULT_TARGETS[..2]; // YouTube and Discord
     let strategies = &["pass-through", "split-tcp"];
 
-    let results = tester::run_test_suite_with_prober(
-        targets,
-        strategies,
-        |_target, strategy| {
-            if strategy == "pass-through" {
-                (ProbeStatus::Blocked("RST".into()), 40, true)
-            } else {
-                (ProbeStatus::Ok("TLS 1.3".into()), 35, true)
-            }
-        },
-    );
+    let results = tester::run_test_suite_with_prober(targets, strategies, |_target, strategy| {
+        if strategy == "pass-through" {
+            (ProbeStatus::Blocked("RST".into()), 40, true)
+        } else {
+            (ProbeStatus::Ok("TLS 1.3".into()), 35, true)
+        }
+    });
 
     assert_eq!(results.len(), 4);
     let table = tester::format_results_table(&results);
@@ -995,11 +1192,18 @@ use local_dpi_bypass::service::{
 fn phase_eight_service_quoted_path_security() {
     // CWE-428 unquoted search path security contract:
     // Any path containing spaces must be enclosed in double quotes.
-    let path_with_spaces = std::path::Path::new(r"C:\Program Files\Local DPI Bypass\dpi-bypass.exe");
+    let path_with_spaces =
+        std::path::Path::new(r"C:\Program Files\Local DPI Bypass\dpi-bypass.exe");
     let cmd = windivert_adapter::build_quoted_service_command(path_with_spaces, "service run");
 
-    assert!(cmd.starts_with('"'), "binary path must start with double quote");
-    assert!(cmd.contains(r#".exe" service run"#), "must close quote before subcommand");
+    assert!(
+        cmd.starts_with('"'),
+        "binary path must start with double quote"
+    );
+    assert!(
+        cmd.contains(r#".exe" service run"#),
+        "must close quote before subcommand"
+    );
     assert_eq!(
         cmd,
         r#""C:\Program Files\Local DPI Bypass\dpi-bypass.exe" service run"#
@@ -1071,7 +1275,10 @@ fn phase_nine_diagnostics_honesty_unsupported_not_fake_ok() {
     let results = diag.run();
 
     // QUIC check must return Unsupported / NotRun honestly, NEVER a fake Ok
-    let quic_check = results.iter().find(|r| r.name == "QUIC").expect("QUIC check present");
+    let quic_check = results
+        .iter()
+        .find(|r| r.name == "QUIC")
+        .expect("QUIC check present");
     assert_ne!(
         quic_check.status,
         CheckStatus::Ok,
@@ -1133,7 +1340,10 @@ fn phase_ten_release_packaging_and_checksums_contract() {
     let run_dir = root.join("run");
 
     // 1. Core release binary exists
-    assert!(run_dir.join("dpi-bypass.exe").exists(), "dpi-bypass.exe must exist in run/");
+    assert!(
+        run_dir.join("dpi-bypass.exe").exists(),
+        "dpi-bypass.exe must exist in run/"
+    );
 
     // 2. WinDivert driver files exist
     assert!(run_dir.join("WinDivert").join("WinDivert.dll").exists());
@@ -1142,11 +1352,36 @@ fn phase_ten_release_packaging_and_checksums_contract() {
     // 3. Configuration files and presets exist
     assert!(run_dir.join("config").join("default.toml").exists());
     assert!(run_dir.join("config").join("phase2.toml").exists());
-    assert!(run_dir.join("config").join("presets").join("youtube").join("domains.txt").exists());
-    assert!(run_dir.join("config").join("presets").join("discord").join("domains.txt").exists());
-    assert!(run_dir.join("config").join("presets").join("discord-voice").join("domains.txt").exists());
-    assert!(run_dir.join("config").join("presets").join("twitch").join("domains.txt").exists());
-    assert!(run_dir.join("config").join("presets").join("telegram").join("domains.txt").exists());
+    assert!(run_dir
+        .join("config")
+        .join("presets")
+        .join("youtube")
+        .join("domains.txt")
+        .exists());
+    assert!(run_dir
+        .join("config")
+        .join("presets")
+        .join("discord")
+        .join("domains.txt")
+        .exists());
+    assert!(run_dir
+        .join("config")
+        .join("presets")
+        .join("discord-voice")
+        .join("domains.txt")
+        .exists());
+    assert!(run_dir
+        .join("config")
+        .join("presets")
+        .join("twitch")
+        .join("domains.txt")
+        .exists());
+    assert!(run_dir
+        .join("config")
+        .join("presets")
+        .join("telegram")
+        .join("domains.txt")
+        .exists());
 
     // 4. One-click management scripts exist
     assert!(run_dir.join("start.cmd").exists());
@@ -1162,10 +1397,18 @@ fn phase_ten_release_packaging_and_checksums_contract() {
     assert!(sums_path.exists());
     let sums_content = std::fs::read_to_string(&sums_path).expect("read SHA256SUMS.txt");
     for line in sums_content.lines() {
-        if line.trim().is_empty() { continue; }
-        assert!(line.len() > 66, "checksum line must contain 64-char hex hash, spaces, and filename");
+        if line.trim().is_empty() {
+            continue;
+        }
+        assert!(
+            line.len() > 66,
+            "checksum line must contain 64-char hex hash, spaces, and filename"
+        );
         let hash_part = &line[..64];
-        assert!(hash_part.chars().all(|c| c.is_ascii_hexdigit()), "hash must be valid hex");
+        assert!(
+            hash_part.chars().all(|c| c.is_ascii_hexdigit()),
+            "hash must be valid hex"
+        );
     }
 }
 
@@ -1181,7 +1424,3 @@ fn phase_ten_security_review_document_contract() {
     assert!(text.contains("Zero Telemetry"));
     assert!(text.contains("Log Privacy Guarantee"));
 }
-
-
-
-

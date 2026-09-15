@@ -111,9 +111,7 @@ pub struct ProbeResult {
 pub fn determine_verdict(status: &ProbeStatus, applied: bool, strategy: &str) -> TestVerdict {
     match status {
         ProbeStatus::Ok(_) => {
-            if strategy == "pass-through" {
-                TestVerdict::Success
-            } else if applied {
+            if strategy == "pass-through" || applied {
                 TestVerdict::Success
             } else {
                 TestVerdict::Inconclusive
@@ -122,9 +120,7 @@ pub fn determine_verdict(status: &ProbeStatus, applied: bool, strategy: &str) ->
         ProbeStatus::Blocked(_) | ProbeStatus::Timeout | ProbeStatus::ConnectionRefused => {
             TestVerdict::Fail
         }
-        ProbeStatus::DnsError(_) | ProbeStatus::Error(_) => {
-            TestVerdict::Inconclusive
-        }
+        ProbeStatus::DnsError(_) | ProbeStatus::Error(_) => TestVerdict::Inconclusive,
     }
 }
 
@@ -230,7 +226,10 @@ pub fn probe_live_tls(target: &TestTarget, timeout: Duration) -> (ProbeStatus, u
                 };
                 (ProbeStatus::Ok(version.to_string()), elapsed)
             } else {
-                (ProbeStatus::Blocked(format!("byte 0x{:02x}", resp[0])), elapsed)
+                (
+                    ProbeStatus::Blocked(format!("byte 0x{:02x}", resp[0])),
+                    elapsed,
+                )
             }
         }
         Err(e) => {
@@ -248,10 +247,8 @@ pub fn probe_live_tls(target: &TestTarget, timeout: Duration) -> (ProbeStatus, u
 
 /// Runs the strategy tester in mock mode for deterministic CI/contracts verification.
 pub fn run_mock_tester() -> String {
-    let results = run_test_suite_with_prober(
-        DEFAULT_TARGETS,
-        DEFAULT_STRATEGIES,
-        |target, strategy| {
+    let results =
+        run_test_suite_with_prober(DEFAULT_TARGETS, DEFAULT_STRATEGIES, |target, strategy| {
             match strategy {
                 "pass-through" => (ProbeStatus::Blocked("RST".into()), 45, true),
                 "split-tcp" => {
@@ -266,8 +263,7 @@ pub fn run_mock_tester() -> String {
                 }
                 _ => (ProbeStatus::Error("unknown strategy".into()), 0, false),
             }
-        },
-    );
+        });
     format_results_table(&results)
 }
 
@@ -282,33 +278,25 @@ pub fn execute_tester(mock: bool) -> (u8, String) {
         return (0, msg);
     }
 
-    // Check if WinDivert driver is available to apply live packet modification
-    let p2_loaded = crate::core::phase2_config::Phase2Config::load();
-    let can_divert = p2_loaded.as_ref().map(|(cfg, _)| cfg.enabled).unwrap_or(false)
-        && windivert_adapter::driver_files().is_ok()
-        && windivert_adapter::require_administrator().is_ok();
-
-    let mut output = String::from("Running sequential strategy tester (live mode):\n");
-    if !can_divert {
-        output.push_str("Notice: WinDivert capture driver inactive or disabled in phase2.toml.\n");
-        output.push_str("Probes will test direct connectivity; active strategies will report INCONCLUSIVE.\n\n");
-    }
-
-    let results = run_test_suite_with_prober(
-        DEFAULT_TARGETS,
-        DEFAULT_STRATEGIES,
-        |target, strategy| {
+    // No strategy engine is started here. Report protocol reachability only,
+    // always INCONCLUSIVE: a partial TLS response is not validated HTTPS.
+    let results =
+        run_test_suite_with_prober(DEFAULT_TARGETS, &["connectivity-only"], |target, _| {
             let (status, latency) = probe_live_tls(target, DEFAULT_PROBE_TIMEOUT);
-            // In live mode without active driver handle, strategy is not applied
-            let applied = strategy == "pass-through";
-            (status, latency, applied)
-        },
+            (status, latency, false)
+        });
+    let mut results = results;
+    for result in &mut results {
+        result.result = TestVerdict::Inconclusive;
+    }
+    let mut output = String::from(
+        "Connectivity probes only: NO strategies are started or compared.\n\
+         TLS response header only; certificates/HTTPS/voice/QUIC are NOT verified.\n\
+         A running capture or VPN may affect these probes.\n\n",
     );
-
     output.push_str(&format_results_table(&results));
-    output.push_str("\nStrategy evaluation completed.\nProfile restored: original configuration unchanged.\n");
-
-    (0, output)
+    output.push_str("\nAutomatic strategy selection is unavailable. Configuration unchanged.\n");
+    (2, output)
 }
 
 #[cfg(test)]
@@ -348,7 +336,11 @@ mod tests {
         );
         // DNS error is INCONCLUSIVE
         assert_eq!(
-            determine_verdict(&ProbeStatus::DnsError("NXDOMAIN".into()), false, "split-tcp"),
+            determine_verdict(
+                &ProbeStatus::DnsError("NXDOMAIN".into()),
+                false,
+                "split-tcp"
+            ),
             TestVerdict::Inconclusive
         );
     }

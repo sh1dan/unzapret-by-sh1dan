@@ -2,11 +2,11 @@
 //! Strict schema: unknown keys, disabled strategies, payload_logging=true,
 //! wildcard IPs and zero/excessive limits all cause load failure.
 
+use crate::capture::{CaptureError, ErrorKind};
+use crate::filtering::engine::{FilterEngine, TargetPreset};
+use crate::filtering::list::{DomainEntry, IpEntry, ListError};
 use std::io::Read;
 use std::path::Path;
-use crate::capture::{CaptureError, ErrorKind};
-use crate::filtering::list::{DomainEntry, IpEntry, ListError};
-use crate::filtering::engine::{FilterEngine, TargetPreset};
 use windivert_adapter::validated_file;
 
 /// Maximum size of the main config file.
@@ -16,7 +16,9 @@ const MAX_LIST_BYTES: u64 = 65_536;
 /// Maximum entries in any single TXT list.
 const MAX_LIST_ENTRIES: usize = 4096;
 
-fn cfg_err() -> CaptureError { CaptureError::new(ErrorKind::InvalidConfiguration, None) }
+fn cfg_err() -> CaptureError {
+    CaptureError::new(ErrorKind::InvalidConfiguration, None)
+}
 
 fn from_list(e: ListError) -> CaptureError {
     eprintln!("config list error: {e}");
@@ -25,24 +27,40 @@ fn from_list(e: ListError) -> CaptureError {
 
 /// Fully loaded and validated runtime configuration.
 pub struct LoadedConfig {
-    pub dry_run:            bool,
-    pub max_flows:          usize,
-    pub flow_idle_seconds:  u32,
-    pub max_initial_bytes:  usize,
+    pub dry_run: bool,
+    pub max_flows: usize,
+    pub flow_idle_seconds: u32,
+    pub max_initial_bytes: usize,
     pub max_packets_per_flow: u8,
-    pub strategy:           String,
-    pub filter_engine:      FilterEngine,
+    pub strategy: String,
+    pub filter_engine: FilterEngine,
 }
 
 pub fn load_config(config_root: &Path) -> Result<LoadedConfig, CaptureError> {
-    // ── Read and parse TOML ──────────────────────────────────────────────────
-    let config_path = validated_file(config_root, "config/default.toml", ErrorKind::InvalidConfiguration)?;
-    let text = read_bounded(&config_path, MAX_CONFIG_BYTES, ErrorKind::InvalidConfiguration)?;
+    // â”€â”€ Read and parse TOML â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    let config_path = validated_file(
+        config_root,
+        "config/default.toml",
+        ErrorKind::InvalidConfiguration,
+    )?;
+    let text = read_bounded(
+        &config_path,
+        MAX_CONFIG_BYTES,
+        ErrorKind::InvalidConfiguration,
+    )?;
     let value: toml::Value = text.parse().map_err(|_| cfg_err())?;
     let root = value.as_table().ok_or_else(cfg_err)?;
 
     // Validate no unexpected top-level keys.
-    let known_top = ["schema_version", "engine", "targets", "filters", "strategy", "strategies", "logging"];
+    let known_top = [
+        "schema_version",
+        "engine",
+        "targets",
+        "filters",
+        "strategy",
+        "strategies",
+        "logging",
+    ];
     for key in root.keys() {
         if !known_top.contains(&key.as_str()) {
             eprintln!("config: unknown key '{key}'");
@@ -50,57 +68,116 @@ pub fn load_config(config_root: &Path) -> Result<LoadedConfig, CaptureError> {
         }
     }
 
-    let schema = root.get("schema_version").and_then(|v| v.as_integer()).ok_or_else(cfg_err)?;
-    if schema != 1 { return Err(cfg_err()); }
-
-    // ── [engine] ─────────────────────────────────────────────────────────────
-    let engine = root.get("engine").and_then(|v| v.as_table()).ok_or_else(cfg_err)?;
-    let known_engine = ["dry_run", "max_flows", "flow_idle_seconds", "max_initial_bytes", "max_packets_per_flow"];
-    for k in engine.keys() {
-        if !known_engine.contains(&k.as_str()) { return Err(cfg_err()); }
-    }
-    let dry_run = engine.get("dry_run").and_then(|v| v.as_bool()).ok_or_else(cfg_err)?;
-    let max_flows = engine.get("max_flows").and_then(|v| v.as_integer()).ok_or_else(cfg_err)?;
-    let flow_idle_seconds = engine.get("flow_idle_seconds").and_then(|v| v.as_integer()).ok_or_else(cfg_err)?;
-    let max_initial_bytes = engine.get("max_initial_bytes").and_then(|v| v.as_integer()).ok_or_else(cfg_err)?;
-    let max_packets_per_flow = engine.get("max_packets_per_flow").and_then(|v| v.as_integer()).ok_or_else(cfg_err)?;
-
-    if max_flows <= 0 || max_flows > 65536 { return Err(cfg_err()); }
-    if flow_idle_seconds <= 0 || flow_idle_seconds > 3600 { return Err(cfg_err()); }
-    if max_initial_bytes <= 0 || max_initial_bytes > 65536 { return Err(cfg_err()); }
-    if max_packets_per_flow <= 0 || max_packets_per_flow > 32 { return Err(cfg_err()); }
-
-    // ── [strategy] ───────────────────────────────────────────────────────────
-    let strategy_table = root.get("strategy").and_then(|v| v.as_table()).ok_or_else(cfg_err)?;
-    let strategy_name = strategy_table.get("name").and_then(|v| v.as_str()).ok_or_else(cfg_err)?;
-    // Supported strategies: pass-through, split-tcp, auto
-    let known_strategies = ["pass-through", "split-tcp", "auto"];
-    if !known_strategies.contains(&strategy_name) {
-        eprintln!("config: unknown/unimplemented strategy '{strategy_name}'");
+    let schema = root
+        .get("schema_version")
+        .and_then(|v| v.as_integer())
+        .ok_or_else(cfg_err)?;
+    if schema != 1 {
         return Err(cfg_err());
     }
 
-    // ── [logging] — validate but do not act on ────────────────────────────────
+    // â”€â”€ [engine] â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    let engine = root
+        .get("engine")
+        .and_then(|v| v.as_table())
+        .ok_or_else(cfg_err)?;
+    let known_engine = [
+        "dry_run",
+        "max_flows",
+        "flow_idle_seconds",
+        "max_initial_bytes",
+        "max_packets_per_flow",
+    ];
+    for k in engine.keys() {
+        if !known_engine.contains(&k.as_str()) {
+            return Err(cfg_err());
+        }
+    }
+    let dry_run = engine
+        .get("dry_run")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(cfg_err)?;
+    let max_flows = engine
+        .get("max_flows")
+        .and_then(|v| v.as_integer())
+        .ok_or_else(cfg_err)?;
+    let flow_idle_seconds = engine
+        .get("flow_idle_seconds")
+        .and_then(|v| v.as_integer())
+        .ok_or_else(cfg_err)?;
+    let max_initial_bytes = engine
+        .get("max_initial_bytes")
+        .and_then(|v| v.as_integer())
+        .ok_or_else(cfg_err)?;
+    let max_packets_per_flow = engine
+        .get("max_packets_per_flow")
+        .and_then(|v| v.as_integer())
+        .ok_or_else(cfg_err)?;
+
+    if max_flows <= 0 || max_flows > 65536 {
+        return Err(cfg_err());
+    }
+    if flow_idle_seconds <= 0 || flow_idle_seconds > 3600 {
+        return Err(cfg_err());
+    }
+    if max_initial_bytes <= 0 || max_initial_bytes > 65536 {
+        return Err(cfg_err());
+    }
+    if max_packets_per_flow <= 0 || max_packets_per_flow > 32 {
+        return Err(cfg_err());
+    }
+
+    // â”€â”€ [strategy] â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    let strategy_table = root
+        .get("strategy")
+        .and_then(|v| v.as_table())
+        .ok_or_else(cfg_err)?;
+    let strategy_name = strategy_table
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(cfg_err)?;
+    validate_strategy(root)?;
+
+    // â”€â”€ [logging] â€” validate but do not act on â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if let Some(logging) = root.get("logging").and_then(|v| v.as_table()) {
-        if logging.get("packet_payload_logging").and_then(|v| v.as_bool()) == Some(true) {
+        if logging
+            .get("packet_payload_logging")
+            .and_then(|v| v.as_bool())
+            == Some(true)
+        {
             eprintln!("config: packet_payload_logging=true is not permitted");
             return Err(cfg_err());
         }
     }
 
-    // ── [filters] ────────────────────────────────────────────────────────────
-    let filters = root.get("filters").and_then(|v| v.as_table()).ok_or_else(cfg_err)?;
+    // â”€â”€ [filters] â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    let filters = root
+        .get("filters")
+        .and_then(|v| v.as_table())
+        .ok_or_else(cfg_err)?;
     let known_filters = ["exclude_domains_file", "exclude_ips_file", "unknown_action"];
     for k in filters.keys() {
-        if !known_filters.contains(&k.as_str()) { return Err(cfg_err()); }
+        if !known_filters.contains(&k.as_str()) {
+            return Err(cfg_err());
+        }
     }
 
     let exclude_domains = load_domain_list(config_root, filters, "exclude_domains_file")?;
     let exclude_ips = load_ip_list(config_root, filters, "exclude_ips_file")?;
 
-    // ── [targets.*] ──────────────────────────────────────────────────────────
-    let targets_table = root.get("targets").and_then(|v| v.as_table()).ok_or_else(cfg_err)?;
-    let known_targets = ["youtube", "discord", "twitch", "telegram", "discord_voice", "custom"];
+    // â”€â”€ [targets.*] â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    let targets_table = root
+        .get("targets")
+        .and_then(|v| v.as_table())
+        .ok_or_else(cfg_err)?;
+    let known_targets = [
+        "youtube",
+        "discord",
+        "twitch",
+        "telegram",
+        "discord_voice",
+        "custom",
+    ];
     for k in targets_table.keys() {
         if !known_targets.contains(&k.as_str()) {
             eprintln!("config: unknown target '{k}'");
@@ -111,15 +188,25 @@ pub fn load_config(config_root: &Path) -> Result<LoadedConfig, CaptureError> {
     let mut presets = Vec::new();
     for name in known_targets {
         if let Some(target) = targets_table.get(name).and_then(|v| v.as_table()) {
-            let enabled = target.get("enabled").and_then(|v| v.as_bool()).ok_or_else(cfg_err)?;
-            if !enabled { continue; }
+            let enabled = target
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .ok_or_else(cfg_err)?;
+            if !enabled {
+                continue;
+            }
 
             let allow_domains = load_domain_list(config_root, target, "domains_file")?;
             let allow_ips = load_ip_list(config_root, target, "ips_file")?;
             let tcp_ports = load_ports(target, "tcp_ports")?;
             let udp_ports = load_ports(target, "udp_ports")?;
 
-            presets.push(TargetPreset { allow_domains, allow_ips, tcp_ports, udp_ports });
+            presets.push(TargetPreset {
+                allow_domains,
+                allow_ips,
+                tcp_ports,
+                udp_ports,
+            });
         }
     }
 
@@ -134,12 +221,39 @@ pub fn load_config(config_root: &Path) -> Result<LoadedConfig, CaptureError> {
     })
 }
 
+fn validate_strategy(root: &toml::map::Map<String, toml::Value>) -> Result<(), CaptureError> {
+    let table = root
+        .get("strategy")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(cfg_err)?;
+    if table.len() != 1 {
+        return Err(cfg_err());
+    }
+    let name = table
+        .get("name")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(cfg_err)?;
+    crate::strategies::create(name)?;
+    let enabled = root
+        .get("strategies")
+        .and_then(|v| v.get(name))
+        .and_then(|v| v.get("enabled"))
+        .and_then(toml::Value::as_bool);
+    if enabled != Some(true) {
+        return Err(cfg_err());
+    }
+    Ok(())
+}
+
 fn read_bounded(path: &Path, limit: u64, kind: ErrorKind) -> Result<String, CaptureError> {
     let file = std::fs::File::open(path).map_err(|e| CaptureError::from_io(kind, &e))?;
     let mut text = String::new();
-    file.take(limit + 1).read_to_string(&mut text)
+    file.take(limit + 1)
+        .read_to_string(&mut text)
         .map_err(|e| CaptureError::from_io(kind, &e))?;
-    if text.len() as u64 > limit { return Err(CaptureError::new(kind, None)); }
+    if text.len() as u64 > limit {
+        return Err(CaptureError::new(kind, None));
+    }
     Ok(text)
 }
 
@@ -152,10 +266,16 @@ fn load_domain_list(
         Some(s) => s,
         None => return Ok(vec![]),
     };
-    let path = validated_file(config_root, &format!("config/{rel}"), ErrorKind::InvalidConfiguration)?;
+    let path = validated_file(
+        config_root,
+        &format!("config/{rel}"),
+        ErrorKind::InvalidConfiguration,
+    )?;
     let text = read_bounded(&path, MAX_LIST_BYTES, ErrorKind::InvalidConfiguration)?;
     let entries = crate::filtering::list::parse_domains(&text).map_err(from_list)?;
-    if entries.len() > MAX_LIST_ENTRIES { return Err(cfg_err()); }
+    if entries.len() > MAX_LIST_ENTRIES {
+        return Err(cfg_err());
+    }
     Ok(entries)
 }
 
@@ -168,10 +288,16 @@ fn load_ip_list(
         Some(s) => s,
         None => return Ok(vec![]),
     };
-    let path = validated_file(config_root, &format!("config/{rel}"), ErrorKind::InvalidConfiguration)?;
+    let path = validated_file(
+        config_root,
+        &format!("config/{rel}"),
+        ErrorKind::InvalidConfiguration,
+    )?;
     let text = read_bounded(&path, MAX_LIST_BYTES, ErrorKind::InvalidConfiguration)?;
     let entries = crate::filtering::list::parse_ips(&text).map_err(from_list)?;
-    if entries.len() > MAX_LIST_ENTRIES { return Err(cfg_err()); }
+    if entries.len() > MAX_LIST_ENTRIES {
+        return Err(cfg_err());
+    }
     Ok(entries)
 }
 
@@ -179,9 +305,39 @@ fn load_ports(
     table: &toml::map::Map<String, toml::Value>,
     key: &str,
 ) -> Result<Vec<u16>, CaptureError> {
-    let arr = table.get(key).and_then(|v| v.as_array()).ok_or_else(cfg_err)?;
-    arr.iter().map(|v| {
-        let n = v.as_integer().ok_or_else(cfg_err)?;
-        u16::try_from(n).ok().filter(|&p| p != 0).ok_or_else(cfg_err)
-    }).collect()
+    let arr = table
+        .get(key)
+        .and_then(|v| v.as_array())
+        .ok_or_else(cfg_err)?;
+    arr.iter()
+        .map(|v| {
+            let n = v.as_integer().ok_or_else(cfg_err)?;
+            u16::try_from(n)
+                .ok()
+                .filter(|&p| p != 0)
+                .ok_or_else(cfg_err)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod strategy_tests {
+    use super::*;
+    fn check(name: &str, enabled: &str) -> bool {
+        let value: toml::Value = format!(
+            "[strategy]\nname = \"{name}\"\n[strategies.\"{name}\"]\nenabled = {enabled}\n"
+        )
+        .parse()
+        .unwrap();
+        validate_strategy(value.as_table().unwrap()).is_ok()
+    }
+    #[test]
+    fn rejects_disabled_unknown_and_experimental_profiles() {
+        assert!(check("split-tcp", "true"));
+        assert!(check("pass-through", "true"));
+        assert!(!check("split-tcp", "false"));
+        assert!(!check("split-tcp-only", "true"));
+        assert!(!check("auto", "true"));
+        assert!(!check("split-tcp", "\"true\""));
+    }
 }

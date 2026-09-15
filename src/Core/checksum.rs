@@ -41,11 +41,7 @@ fn fold_sum(mut sum: u32) -> u16 {
 
 /// Computes the TCP checksum over IPv4 pseudo-header, TCP header, and payload.
 /// `tcp_segment` contains `tcp_header + tcp_payload` with the TCP checksum field zeroed.
-pub fn tcp_checksum_ipv4(
-    src: Ipv4Addr,
-    dst: Ipv4Addr,
-    tcp_segment: &[u8],
-) -> u16 {
+pub fn tcp_checksum_ipv4(src: Ipv4Addr, dst: Ipv4Addr, tcp_segment: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     // IPv4 Pseudo-header:
     // Source IP (4 bytes)
@@ -76,11 +72,7 @@ pub fn tcp_checksum_ipv4(
 
 /// Computes the TCP checksum over IPv6 pseudo-header, TCP header, and payload.
 /// `tcp_segment` contains `tcp_header + tcp_payload` with the TCP checksum field zeroed.
-pub fn tcp_checksum_ipv6(
-    src: Ipv6Addr,
-    dst: Ipv6Addr,
-    tcp_segment: &[u8],
-) -> u16 {
+pub fn tcp_checksum_ipv6(src: Ipv6Addr, dst: Ipv6Addr, tcp_segment: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     // IPv6 Pseudo-header:
     // Source IP (16 bytes)
@@ -112,11 +104,7 @@ pub fn tcp_checksum_ipv6(
 }
 
 /// Convenience wrapper for either IPv4 or IPv6 TCP checksum calculation.
-pub fn tcp_checksum(
-    src: IpAddr,
-    dst: IpAddr,
-    tcp_segment: &[u8],
-) -> u16 {
+pub fn tcp_checksum(src: IpAddr, dst: IpAddr, tcp_segment: &[u8]) -> u16 {
     match (src, dst) {
         (IpAddr::V4(s), IpAddr::V4(d)) => tcp_checksum_ipv4(s, d, tcp_segment),
         (IpAddr::V6(s), IpAddr::V6(d)) => tcp_checksum_ipv6(s, d, tcp_segment),
@@ -126,11 +114,7 @@ pub fn tcp_checksum(
 
 /// Computes the UDP checksum over IPv4 pseudo-header, UDP header, and payload.
 /// `udp_segment` contains `udp_header + payload` with checksum field zeroed.
-pub fn udp_checksum_ipv4(
-    src: Ipv4Addr,
-    dst: Ipv4Addr,
-    udp_segment: &[u8],
-) -> u16 {
+pub fn udp_checksum_ipv4(src: Ipv4Addr, dst: Ipv4Addr, udp_segment: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     for chunk in src.octets().chunks_exact(2) {
         sum += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
@@ -153,16 +137,16 @@ pub fn udp_checksum_ipv4(
     }
 
     let csum = fold_sum(sum);
-    if csum == 0 { 0xffff } else { csum }
+    if csum == 0 {
+        0xffff
+    } else {
+        csum
+    }
 }
 
 /// Computes the UDP checksum over IPv6 pseudo-header, UDP header, and payload.
 /// `udp_segment` contains `udp_header + payload` with checksum field zeroed.
-pub fn udp_checksum_ipv6(
-    src: Ipv6Addr,
-    dst: Ipv6Addr,
-    udp_segment: &[u8],
-) -> u16 {
+pub fn udp_checksum_ipv6(src: Ipv6Addr, dst: Ipv6Addr, udp_segment: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     for chunk in src.octets().chunks_exact(2) {
         sum += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
@@ -186,22 +170,21 @@ pub fn udp_checksum_ipv6(
     }
 
     let csum = fold_sum(sum);
-    if csum == 0 { 0xffff } else { csum }
+    if csum == 0 {
+        0xffff
+    } else {
+        csum
+    }
 }
 
 /// Convenience wrapper for either IPv4 or IPv6 UDP checksum calculation.
-pub fn udp_checksum(
-    src: IpAddr,
-    dst: IpAddr,
-    udp_segment: &[u8],
-) -> u16 {
+pub fn udp_checksum(src: IpAddr, dst: IpAddr, udp_segment: &[u8]) -> u16 {
     match (src, dst) {
         (IpAddr::V4(s), IpAddr::V4(d)) => udp_checksum_ipv4(s, d, udp_segment),
         (IpAddr::V6(s), IpAddr::V6(d)) => udp_checksum_ipv6(s, d, udp_segment),
         _ => 0,
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -295,4 +278,3 @@ mod tests {
         assert_eq!(internet_checksum(&pseudo), 0x0000);
     }
 }
-

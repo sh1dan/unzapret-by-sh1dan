@@ -4,22 +4,22 @@
 //!         at most 4 initial-payload packets per flow.
 //!
 //! When the table is full, new flows are classified Unknown (not AllowModify).
-//! Retransmissions (repeated sequence position) are not re-budgeted.
+//! Payload retransmissions currently consume budget; sequence reassembly is not implemented.
 //! This module does NOT touch packet bytes; it only tracks counters and timestamps.
 
+use crate::core::Transport;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
-use crate::core::Transport;
 
 /// Uniquely identifies a unidirectional flow.
 /// Not Debug: contains network endpoints.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct FlowKey {
-    pub src:       IpAddr,
-    pub dst:       IpAddr,
-    pub src_port:  u16,
-    pub dst_port:  u16,
+    pub src: IpAddr,
+    pub dst: IpAddr,
+    pub src_port: u16,
+    pub dst_port: u16,
     pub transport: Transport,
 }
 
@@ -27,14 +27,14 @@ pub struct FlowKey {
 struct FlowState {
     /// Number of initial-payload packets already observed.
     initial_count: u8,
-    last_seen:     Instant,
+    last_seen: Instant,
 }
 
 pub struct FlowTable {
-    flows:             HashMap<FlowKey, FlowState>,
-    max_flows:         usize,
-    idle_timeout:      Duration,
-    max_initial_pkts:  u8,
+    flows: HashMap<FlowKey, FlowState>,
+    max_flows: usize,
+    idle_timeout: Duration,
+    max_initial_pkts: u8,
 }
 
 /// Classification result from the flow table.
@@ -85,7 +85,13 @@ impl FlowTable {
         if self.flows.len() >= self.max_flows {
             return FlowClassification::TableFull;
         }
-        self.flows.insert(key, FlowState { initial_count: 1, last_seen: now });
+        self.flows.insert(
+            key,
+            FlowState {
+                initial_count: 1,
+                last_seen: now,
+            },
+        );
         FlowClassification::InitialPayload
     }
 
@@ -95,9 +101,8 @@ impl FlowTable {
     }
 
     fn evict_idle_at(&mut self, now: Instant) {
-        self.flows.retain(|_, state| {
-            now.duration_since(state.last_seen) < self.idle_timeout
-        });
+        self.flows
+            .retain(|_, state| now.duration_since(state.last_seen) < self.idle_timeout);
     }
 
     /// Number of currently active flows (after eviction).
@@ -125,10 +130,22 @@ mod tests {
     fn first_four_packets_are_initial() {
         let mut table = FlowTable::new(128, Duration::from_secs(30), 4);
         let k = key(1234);
-        assert_eq!(table.classify(k.clone()), FlowClassification::InitialPayload);
-        assert_eq!(table.classify(k.clone()), FlowClassification::InitialPayload);
-        assert_eq!(table.classify(k.clone()), FlowClassification::InitialPayload);
-        assert_eq!(table.classify(k.clone()), FlowClassification::InitialPayload);
+        assert_eq!(
+            table.classify(k.clone()),
+            FlowClassification::InitialPayload
+        );
+        assert_eq!(
+            table.classify(k.clone()),
+            FlowClassification::InitialPayload
+        );
+        assert_eq!(
+            table.classify(k.clone()),
+            FlowClassification::InitialPayload
+        );
+        assert_eq!(
+            table.classify(k.clone()),
+            FlowClassification::InitialPayload
+        );
         assert_eq!(table.classify(k.clone()), FlowClassification::LaterPayload);
     }
 

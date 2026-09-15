@@ -1,3 +1,5 @@
+> Исторический self-review, не сертификат безопасности. Обнаруженные дефекты: [audit-2026-09-15.md](audit-2026-09-15.md); текущие исправления и ограничения: [fixes-1.0.5-rc.1.md](fixes-1.0.5-rc.1.md).
+
 # Security & Privacy Review — unzapret-by-sh1dan
 
 **Date**: 2026-09-14  

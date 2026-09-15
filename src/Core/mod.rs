@@ -2,22 +2,25 @@ use std::net::IpAddr;
 
 use crate::filtering::FilterDecision;
 
-pub mod config;
-pub mod parser;
-pub mod pipeline;
-pub mod phase2_config;
-pub mod flow;
-pub mod config_loader;
 pub mod checksum;
-pub mod segment;
-pub mod tls;
+pub mod config;
+pub mod config_loader;
+pub mod flow;
+pub mod parser;
+pub mod payloads;
+pub mod phase2_config;
+pub mod pipeline;
 pub mod quic;
+pub mod segment;
 pub mod stun;
 pub mod tester;
-pub mod payloads;
+pub mod tls;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Transport { Tcp, Udp }
+pub enum Transport {
+    Tcp,
+    Udp,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InitialMetadata {
@@ -45,6 +48,7 @@ pub struct Counters {
     pub processed: u64,
     pub eligible: u64,
     pub modified: u64,
+    pub would_modify: u64,
     pub errors: u64,
     pub reinserted: u64,
     pub receive_errors: u64,
@@ -59,8 +63,19 @@ pub struct Counters {
     pub ipv6: u64,
 }
 
+impl std::fmt::Display for Counters {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "processed={} eligible={} reinserted={} modified={} would_modify={} tcp={} udp={} errors={} receive_errors={} send_errors={} dropped={}",
+            self.processed, self.eligible, self.reinserted, self.modified, self.would_modify,
+            self.tcp, self.udp, self.errors, self.receive_errors, self.send_errors, self.dropped)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RunMode { Active, DryRun }
+pub enum RunMode {
+    Active,
+    DryRun,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EngineError {
@@ -72,8 +87,11 @@ pub enum EngineError {
 /// Adapter owns capture lifetime and per-flow state; callers own shutdown.
 /// Future run implementation must stop receiving and drain before closing.
 pub trait PacketEngine {
-    fn run(&mut self, mode: RunMode, stop: &std::sync::atomic::AtomicBool)
-        -> Result<Counters, EngineError>;
+    fn run(
+        &mut self,
+        mode: RunMode,
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<Counters, EngineError>;
     fn counters(&self) -> Counters;
 }
 
@@ -82,11 +100,15 @@ pub trait PacketEngine {
 pub struct UnavailableEngine;
 
 impl PacketEngine for UnavailableEngine {
-    fn run(&mut self, _: RunMode, _: &std::sync::atomic::AtomicBool)
-        -> Result<Counters, EngineError>
-    {
+    fn run(
+        &mut self,
+        _: RunMode,
+        _: &std::sync::atomic::AtomicBool,
+    ) -> Result<Counters, EngineError> {
         Err(EngineError::NotImplemented)
     }
 
-    fn counters(&self) -> Counters { Counters::default() }
+    fn counters(&self) -> Counters {
+        Counters::default()
+    }
 }

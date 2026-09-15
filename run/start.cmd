@@ -3,10 +3,11 @@ setlocal
 cd /d "%~dp0"
 
 :: Check for administrative rights
-net session >nul 2>&1
+powershell.exe -NoProfile -Command "$p = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent()); if ($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 } else { exit 1 }" >nul 2>&1
 if %errorlevel% neq 0 (
     echo [!] Requesting administrator privileges...
-    powershell -Command "Start-Process '%~f0' -Verb RunAs"
+    set "LOCAL_DPI_LAUNCHER=%~f0"
+    powershell.exe -NoProfile -Command "Start-Process -FilePath $env:LOCAL_DPI_LAUNCHER -Verb RunAs -ErrorAction Stop"
     exit /b
 )
 
@@ -18,6 +19,9 @@ echo   Press Ctrl+C to safely stop.
 echo ============================================================
 echo.
 
+echo TCP-only candidate. Voice and QUIC bypass are unavailable.
+echo Stop the old console and service before testing this build.
+dpi-bypass.exe --version
 dpi-bypass.exe start
 
 echo.

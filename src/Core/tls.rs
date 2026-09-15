@@ -60,40 +60,59 @@ pub fn parse_client_hello(payload: &[u8]) -> Result<Option<&str>, TlsError> {
     cursor += 34; // skip version and random
 
     // Session ID: 1-byte length + vector
-    if cursor >= hs_body.len() { return Err(TlsError::Truncated); }
+    if cursor >= hs_body.len() {
+        return Err(TlsError::Truncated);
+    }
     let session_id_len = usize::from(hs_body[cursor]);
     cursor += 1;
-    if cursor + session_id_len > hs_body.len() { return Err(TlsError::Truncated); }
+    if cursor + session_id_len > hs_body.len() {
+        return Err(TlsError::Truncated);
+    }
     cursor += session_id_len;
 
     // Cipher Suites: 2-byte length + vector
-    if cursor + 2 > hs_body.len() { return Err(TlsError::Truncated); }
+    if cursor + 2 > hs_body.len() {
+        return Err(TlsError::Truncated);
+    }
     let cipher_suites_len = usize::from(u16::from_be_bytes([hs_body[cursor], hs_body[cursor + 1]]));
     cursor += 2;
-    if cursor + cipher_suites_len > hs_body.len() { return Err(TlsError::Truncated); }
+    if cursor + cipher_suites_len > hs_body.len() {
+        return Err(TlsError::Truncated);
+    }
     cursor += cipher_suites_len;
 
     // Compression Methods: 1-byte length + vector
-    if cursor >= hs_body.len() { return Err(TlsError::Truncated); }
+    if cursor >= hs_body.len() {
+        return Err(TlsError::Truncated);
+    }
     let compression_len = usize::from(hs_body[cursor]);
     cursor += 1;
-    if cursor + compression_len > hs_body.len() { return Err(TlsError::Truncated); }
+    if cursor + compression_len > hs_body.len() {
+        return Err(TlsError::Truncated);
+    }
     cursor += compression_len;
 
     // Extensions: 2-byte length + vector
     if cursor == hs_body.len() {
         return Ok(None); // No extensions present
     }
-    if cursor + 2 > hs_body.len() { return Err(TlsError::Truncated); }
+    if cursor + 2 > hs_body.len() {
+        return Err(TlsError::Truncated);
+    }
     let extensions_len = usize::from(u16::from_be_bytes([hs_body[cursor], hs_body[cursor + 1]]));
     cursor += 2;
     let extensions_end = cursor + extensions_len;
-    if extensions_end > hs_body.len() { return Err(TlsError::Truncated); }
+    if extensions_end > hs_body.len() {
+        return Err(TlsError::Truncated);
+    }
 
     // ── 4. Iterate Extensions to find SNI (type 0x0000) ───────────────────────
     while cursor + 4 <= extensions_end {
         let ext_type = u16::from_be_bytes([hs_body[cursor], hs_body[cursor + 1]]);
-        let ext_len = usize::from(u16::from_be_bytes([hs_body[cursor + 2], hs_body[cursor + 3]]));
+        let ext_len = usize::from(u16::from_be_bytes([
+            hs_body[cursor + 2],
+            hs_body[cursor + 3],
+        ]));
         cursor += 4;
         if cursor + ext_len > extensions_end {
             return Err(TlsError::Truncated);
@@ -104,9 +123,13 @@ pub fn parse_client_hello(payload: &[u8]) -> Result<Option<&str>, TlsError> {
         if ext_type == 0x0000 {
             // SNI extension structure:
             // Server Name List Length (2 bytes)
-            if ext_data.len() < 2 { return Err(TlsError::Malformed); }
+            if ext_data.len() < 2 {
+                return Err(TlsError::Malformed);
+            }
             let list_len = usize::from(u16::from_be_bytes([ext_data[0], ext_data[1]]));
-            if list_len + 2 > ext_data.len() { return Err(TlsError::Malformed); }
+            if list_len + 2 > ext_data.len() {
+                return Err(TlsError::Malformed);
+            }
             let mut list_cursor = 2;
             while list_cursor + 3 <= 2 + list_len {
                 let name_type = ext_data[list_cursor];

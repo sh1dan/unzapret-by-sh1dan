@@ -53,12 +53,16 @@ pub enum ScmError {
 impl std::fmt::Display for ScmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ScmError::AccessDenied => write!(f, "Administrator privileges required (Access Denied)"),
+            ScmError::AccessDenied => {
+                write!(f, "Administrator privileges required (Access Denied)")
+            }
             ScmError::ServiceNotFound => write!(f, "Service is not installed"),
             ScmError::ServiceAlreadyExists => write!(f, "Service is already installed"),
             ScmError::ServiceAlreadyRunning => write!(f, "Service is already running"),
             ScmError::ServiceNotActive => write!(f, "Service is not currently active"),
-            ScmError::ServiceMarkedForDelete => write!(f, "Service is marked for deletion and pending cleanup"),
+            ScmError::ServiceMarkedForDelete => {
+                write!(f, "Service is marked for deletion and pending cleanup")
+            }
             ScmError::InvalidParameter => write!(f, "Invalid parameter passed to SCM"),
             ScmError::OperatingSystem(code) => write!(f, "Windows OS error {code}"),
             ScmError::UnsupportedPlatform => write!(f, "SCM is only supported on Windows"),
@@ -145,10 +149,7 @@ extern "system" {
         dwDesiredAccess: u32,
     ) -> *mut c_void;
 
-    fn QueryServiceStatus(
-        hService: *mut c_void,
-        lpServiceStatus: *mut ServiceStatus,
-    ) -> i32;
+    fn QueryServiceStatus(hService: *mut c_void, lpServiceStatus: *mut ServiceStatus) -> i32;
 
     fn StartServiceW(
         hService: *mut c_void,
@@ -174,10 +175,7 @@ extern "system" {
         lpContext: *mut c_void,
     ) -> *mut c_void;
 
-    fn SetServiceStatus(
-        hServiceStatus: *mut c_void,
-        lpServiceStatus: *const ServiceStatus,
-    ) -> i32;
+    fn SetServiceStatus(hServiceStatus: *mut c_void, lpServiceStatus: *const ServiceStatus) -> i32;
 }
 
 #[link(name = "kernel32")]
@@ -227,17 +225,15 @@ impl Drop for ScHandle {
 
 /// Queries the current status of a Windows service by name.
 pub fn scm_query_status(name: &str) -> Result<ScmState, ScmError> {
-    let scm = ScHandle(unsafe {
-        OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT)
-    });
+    let scm =
+        ScHandle(unsafe { OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT) });
     if scm.0.is_null() {
         return Err(map_last_error());
     }
 
     let wide_name = to_wide(name);
-    let service = ScHandle(unsafe {
-        OpenServiceW(scm.0, wide_name.as_ptr(), SERVICE_QUERY_STATUS)
-    });
+    let service =
+        ScHandle(unsafe { OpenServiceW(scm.0, wide_name.as_ptr(), SERVICE_QUERY_STATUS) });
     if service.0.is_null() {
         let err = map_last_error();
         if err == ScmError::ServiceNotFound {
@@ -348,16 +344,19 @@ pub fn scm_remove_service(name: &str) -> Result<(), ScmError> {
 
 /// Starts an installed Windows service.
 pub fn scm_start_service(name: &str) -> Result<(), ScmError> {
-    let scm = ScHandle(unsafe {
-        OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT)
-    });
+    let scm =
+        ScHandle(unsafe { OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT) });
     if scm.0.is_null() {
         return Err(map_last_error());
     }
 
     let wide_name = to_wide(name);
     let service = ScHandle(unsafe {
-        OpenServiceW(scm.0, wide_name.as_ptr(), SERVICE_START | SERVICE_QUERY_STATUS)
+        OpenServiceW(
+            scm.0,
+            wide_name.as_ptr(),
+            SERVICE_START | SERVICE_QUERY_STATUS,
+        )
     });
     if service.0.is_null() {
         return Err(map_last_error());
@@ -373,16 +372,19 @@ pub fn scm_start_service(name: &str) -> Result<(), ScmError> {
 
 /// Stops a running Windows service and waits for stopped state.
 pub fn scm_stop_service(name: &str) -> Result<(), ScmError> {
-    let scm = ScHandle(unsafe {
-        OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT)
-    });
+    let scm =
+        ScHandle(unsafe { OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT) });
     if scm.0.is_null() {
         return Err(map_last_error());
     }
 
     let wide_name = to_wide(name);
     let service = ScHandle(unsafe {
-        OpenServiceW(scm.0, wide_name.as_ptr(), SERVICE_STOP | SERVICE_QUERY_STATUS)
+        OpenServiceW(
+            scm.0,
+            wide_name.as_ptr(),
+            SERVICE_STOP | SERVICE_QUERY_STATUS,
+        )
     });
     if service.0.is_null() {
         return Err(map_last_error());
@@ -468,8 +470,8 @@ where
     ];
 
     // Wrap the user runner closure in a boxed thread-safe cell
-    static RUNNER: Mutex<Option<Box<dyn FnMut(&AtomicBool) -> Result<(), String> + Send>>> =
-        Mutex::new(None);
+    type ServiceRunner = Box<dyn FnMut(&AtomicBool) -> Result<(), String> + Send>;
+    static RUNNER: Mutex<Option<ServiceRunner>> = Mutex::new(None);
 
     unsafe extern "system" fn service_main(_: u32, _: *mut *mut u16) {
         let wide_name = to_wide("LocalDpiBypass");
@@ -495,18 +497,20 @@ where
         };
         SetServiceStatus(handle, &running_status);
 
-        if let Ok(mut guard) = RUNNER.lock() {
-            if let Some(ref mut run) = *guard {
-                let _ = run(&STOP_FLAG);
-            }
-        }
+        let failed = match RUNNER.lock() {
+            Ok(mut guard) => match guard.as_mut() {
+                Some(run) => run(&STOP_FLAG).is_err(),
+                None => true,
+            },
+            Err(_) => true,
+        };
 
         let stopped_status = ServiceStatus {
             service_type: SERVICE_WIN32_OWN_PROCESS,
             current_state: SERVICE_STOPPED,
             controls_accepted: 0,
-            win32_exit_code: 0,
-            service_specific_exit_code: 0,
+            win32_exit_code: if failed { 1066 } else { 0 },
+            service_specific_exit_code: u32::from(failed),
             check_point: 0,
             wait_hint: 0,
         };

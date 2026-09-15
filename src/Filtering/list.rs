@@ -31,7 +31,9 @@ pub struct ListError {
 }
 
 impl ListError {
-    const fn new(line: usize, message: &'static str) -> Self { Self { line, message } }
+    const fn new(line: usize, message: &'static str) -> Self {
+        Self { line, message }
+    }
 }
 
 impl std::fmt::Display for ListError {
@@ -47,7 +49,9 @@ pub fn parse_domains(text: &str) -> Result<Vec<DomainEntry>, ListError> {
     for (idx, raw) in text.lines().enumerate() {
         let line_num = idx + 1;
         let entry = strip_comment(raw).trim();
-        if entry.is_empty() { continue; }
+        if entry.is_empty() {
+            continue;
+        }
         out.push(parse_domain_entry(entry, line_num)?);
     }
     Ok(out)
@@ -59,7 +63,9 @@ pub fn parse_ips(text: &str) -> Result<Vec<IpEntry>, ListError> {
     for (idx, raw) in text.lines().enumerate() {
         let line_num = idx + 1;
         let entry = strip_comment(raw).trim();
-        if entry.is_empty() { continue; }
+        if entry.is_empty() {
+            continue;
+        }
         out.push(parse_ip_entry(entry, line_num)?);
     }
     Ok(out)
@@ -73,11 +79,13 @@ fn parse_domain_entry(entry: &str, line: usize) -> Result<DomainEntry, ListError
     if entry.len() > 253 {
         return Err(ListError::new(line, "domain name too long (max 253 chars)"));
     }
-    if entry.starts_with('.') {
-        // Suffix entry: strip leading dot, then validate the rest as a hostname.
-        let host = &entry[1..];
+    if let Some(host) = entry.strip_prefix('.') {
+        // Validate the suffix as a hostname.
         if host.is_empty() {
-            return Err(ListError::new(line, "suffix entry has no hostname after dot"));
+            return Err(ListError::new(
+                line,
+                "suffix entry has no hostname after dot",
+            ));
         }
         validate_hostname(host, line)?;
         Ok(DomainEntry::Suffix(normalise_domain(host)))
@@ -99,7 +107,10 @@ fn validate_hostname(host: &str, line: usize) -> Result<(), ListError> {
     }
     // Must be ASCII; Unicode must be pre-encoded as punycode.
     if !host.is_ascii() {
-        return Err(ListError::new(line, "non-ASCII hostname: use punycode encoding"));
+        return Err(ListError::new(
+            line,
+            "non-ASCII hostname: use punycode encoding",
+        ));
     }
     for label in host.trim_end_matches('.').split('.') {
         if label.is_empty() {
@@ -112,7 +123,10 @@ fn validate_hostname(host: &str, line: usize) -> Result<(), ListError> {
             return Err(ListError::new(line, "label starts or ends with hyphen"));
         }
         if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-            return Err(ListError::new(line, "invalid character in label (use a-z, 0-9, hyphen)"));
+            return Err(ListError::new(
+                line,
+                "invalid character in label (use a-z, 0-9, hyphen)",
+            ));
         }
     }
     Ok(())
@@ -124,18 +138,30 @@ fn parse_ip_entry(entry: &str, line: usize) -> Result<IpEntry, ListError> {
         // CIDR
         let prefix: u8 = prefix_str.parse().map_err(|_| invalid())?;
         if let Ok(v4) = addr_str.parse::<Ipv4Addr>() {
-            if prefix > 32 { return Err(ListError::new(line, "IPv4 prefix length exceeds 32")); }
+            if prefix > 32 {
+                return Err(ListError::new(line, "IPv4 prefix length exceeds 32"));
+            }
             // Host bits must be zero.
-            let mask = if prefix == 0 { 0u32 } else { !0u32 << (32 - prefix) };
+            let mask = if prefix == 0 {
+                0u32
+            } else {
+                !0u32 << (32 - prefix)
+            };
             if u32::from(v4) & !mask != 0 {
                 return Err(ListError::new(line, "IPv4 CIDR has non-zero host bits"));
             }
             return Ok(IpEntry::CidrV4 { addr: v4, prefix });
         }
         if let Ok(v6) = addr_str.parse::<Ipv6Addr>() {
-            if prefix > 128 { return Err(ListError::new(line, "IPv6 prefix length exceeds 128")); }
+            if prefix > 128 {
+                return Err(ListError::new(line, "IPv6 prefix length exceeds 128"));
+            }
             let addr_bits = u128::from(v6);
-            let mask = if prefix == 0 { 0u128 } else { !0u128 << (128 - prefix) };
+            let mask = if prefix == 0 {
+                0u128
+            } else {
+                !0u128 << (128 - prefix)
+            };
             if addr_bits & !mask != 0 {
                 return Err(ListError::new(line, "IPv6 CIDR has non-zero host bits"));
             }
@@ -144,7 +170,10 @@ fn parse_ip_entry(entry: &str, line: usize) -> Result<IpEntry, ListError> {
         Err(invalid())
     } else {
         // Single address
-        entry.parse::<IpAddr>().map(IpEntry::Single).map_err(|_| invalid())
+        entry
+            .parse::<IpAddr>()
+            .map(IpEntry::Single)
+            .map_err(|_| invalid())
     }
 }
 
@@ -154,11 +183,19 @@ impl IpEntry {
         match (self, addr) {
             (IpEntry::Single(a), b) => a == b,
             (IpEntry::CidrV4 { addr, prefix }, IpAddr::V4(b)) => {
-                let mask = if *prefix == 0 { 0u32 } else { !0u32 << (32 - prefix) };
+                let mask = if *prefix == 0 {
+                    0u32
+                } else {
+                    !0u32 << (32 - prefix)
+                };
                 u32::from(*addr) & mask == u32::from(*b) & mask
             }
             (IpEntry::CidrV6 { addr, prefix }, IpAddr::V6(b)) => {
-                let mask = if *prefix == 0 { 0u128 } else { !0u128 << (128 - prefix) };
+                let mask = if *prefix == 0 {
+                    0u128
+                } else {
+                    !0u128 << (128 - prefix)
+                };
                 u128::from(*addr) & mask == u128::from(*b) & mask
             }
             _ => false,
@@ -174,7 +211,8 @@ impl DomainEntry {
             DomainEntry::Suffix(apex) => {
                 // sni == apex  OR  sni ends with ".<apex>" (strict label boundary)
                 sni == apex.as_str()
-                    || sni.strip_suffix(apex.as_str())
+                    || sni
+                        .strip_suffix(apex.as_str())
                         .is_some_and(|prefix| prefix.ends_with('.'))
             }
         }
@@ -205,7 +243,10 @@ mod tests {
 
     #[test]
     fn cidr_v4_contains() {
-        let e = IpEntry::CidrV4 { addr: "192.168.0.0".parse().unwrap(), prefix: 24 };
+        let e = IpEntry::CidrV4 {
+            addr: "192.168.0.0".parse().unwrap(),
+            prefix: 24,
+        };
         assert!(e.contains(&"192.168.0.1".parse().unwrap()));
         assert!(e.contains(&"192.168.0.255".parse().unwrap()));
         assert!(!e.contains(&"192.168.1.0".parse().unwrap()));
@@ -213,7 +254,10 @@ mod tests {
 
     #[test]
     fn cidr_v6_contains() {
-        let e = IpEntry::CidrV6 { addr: "2001:db8::".parse().unwrap(), prefix: 32 };
+        let e = IpEntry::CidrV6 {
+            addr: "2001:db8::".parse().unwrap(),
+            prefix: 32,
+        };
         assert!(e.contains(&"2001:db8::1".parse().unwrap()));
         assert!(!e.contains(&"2001:db9::1".parse().unwrap()));
     }
@@ -222,10 +266,13 @@ mod tests {
     fn parse_domains_parses_comment_and_blank() {
         let text = "# comment\n\nexample.com\n.suffix.net\n";
         let entries = parse_domains(text).unwrap();
-        assert_eq!(entries, vec![
-            DomainEntry::Exact("example.com".into()),
-            DomainEntry::Suffix("suffix.net".into()),
-        ]);
+        assert_eq!(
+            entries,
+            vec![
+                DomainEntry::Exact("example.com".into()),
+                DomainEntry::Suffix("suffix.net".into()),
+            ]
+        );
     }
 
     #[test]

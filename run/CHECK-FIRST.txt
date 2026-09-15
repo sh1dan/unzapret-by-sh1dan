@@ -1,0 +1,17 @@
+LOCAL DPI BYPASS 1.0.5-rc.1 - TCP-ONLY TEST CANDIDATE
+
+1. Stop the OLD console with Ctrl+C.
+2. In the OLD folder, run dpi-bypass.exe service stop as Administrator if installed.
+3. Verify service status is Stopped or Not Installed.
+4. Extract this candidate into a NEW folder. Keep the bundled config.
+5. Run start.cmd and verify version 1.0.5-rc.1 / active / split-tcp.
+6. Restart Discord/browser, test text/HTTPS and voice separately.
+7. Save 2-3 [counters] lines and compare with the application completely stopped.
+8. Ctrl+C to stop. Optional separate comparison: start_dry_run.cmd.
+
+DO NOT install a new service until the foreground test is successful.
+Voice UDP and QUIC bypass are NOT implemented in this candidate.
+The default profile does not capture UDP or send fake UDP packets.
+TCP splitting may or may not work with your ISP. No zero-latency guarantee.
+The test command is connectivity-only and returns INCONCLUSIVE (exit 2).
+Never send passwords, tokens, packet dumps or complete proxy environment values.

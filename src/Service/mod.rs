@@ -73,8 +73,12 @@ pub enum ServiceError {
 impl std::fmt::Display for ServiceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ServiceError::NotImplemented => write!(f, "Operation is not supported on this platform"),
-            ServiceError::AccessDenied => write!(f, "Administrator privileges are required (Access Denied)"),
+            ServiceError::NotImplemented => {
+                write!(f, "Operation is not supported on this platform")
+            }
+            ServiceError::AccessDenied => {
+                write!(f, "Administrator privileges are required (Access Denied)")
+            }
             ServiceError::ServiceNotFound => write!(f, "Service is not installed"),
             ServiceError::ServiceAlreadyExists => write!(f, "Service is already installed"),
             ServiceError::ServiceAlreadyRunning => write!(f, "Service is already running"),
@@ -91,9 +95,13 @@ impl From<windivert_adapter::ScmError> for ServiceError {
             windivert_adapter::ScmError::AccessDenied => ServiceError::AccessDenied,
             windivert_adapter::ScmError::ServiceNotFound => ServiceError::ServiceNotFound,
             windivert_adapter::ScmError::ServiceAlreadyExists => ServiceError::ServiceAlreadyExists,
-            windivert_adapter::ScmError::ServiceAlreadyRunning => ServiceError::ServiceAlreadyRunning,
+            windivert_adapter::ScmError::ServiceAlreadyRunning => {
+                ServiceError::ServiceAlreadyRunning
+            }
             windivert_adapter::ScmError::ServiceNotActive => ServiceError::ServiceNotActive,
-            windivert_adapter::ScmError::ServiceMarkedForDelete => ServiceError::ServiceMarkedForDelete,
+            windivert_adapter::ScmError::ServiceMarkedForDelete => {
+                ServiceError::ServiceMarkedForDelete
+            }
             windivert_adapter::ScmError::OperatingSystem(c) => ServiceError::OperatingSystem(c),
             windivert_adapter::ScmError::UnsupportedPlatform
             | windivert_adapter::ScmError::InvalidParameter => ServiceError::NotImplemented,
@@ -114,12 +122,24 @@ pub trait ServiceManager {
 pub struct UnavailableService;
 
 impl ServiceManager for UnavailableService {
-    fn status(&self) -> Result<ServiceState, ServiceError> { Err(ServiceError::NotImplemented) }
-    fn install(&self) -> Result<(), ServiceError> { Err(ServiceError::NotImplemented) }
-    fn remove(&self) -> Result<(), ServiceError> { Err(ServiceError::NotImplemented) }
-    fn start(&self) -> Result<(), ServiceError> { Err(ServiceError::NotImplemented) }
-    fn stop(&self) -> Result<(), ServiceError> { Err(ServiceError::NotImplemented) }
-    fn restart(&self) -> Result<(), ServiceError> { Err(ServiceError::NotImplemented) }
+    fn status(&self) -> Result<ServiceState, ServiceError> {
+        Err(ServiceError::NotImplemented)
+    }
+    fn install(&self) -> Result<(), ServiceError> {
+        Err(ServiceError::NotImplemented)
+    }
+    fn remove(&self) -> Result<(), ServiceError> {
+        Err(ServiceError::NotImplemented)
+    }
+    fn start(&self) -> Result<(), ServiceError> {
+        Err(ServiceError::NotImplemented)
+    }
+    fn stop(&self) -> Result<(), ServiceError> {
+        Err(ServiceError::NotImplemented)
+    }
+    fn restart(&self) -> Result<(), ServiceError> {
+        Err(ServiceError::NotImplemented)
+    }
 }
 
 /// Windows Service Control Manager client.
@@ -216,39 +236,27 @@ pub fn run_service() -> (u8, String) {
 }
 
 fn run_engine_as_service(stop_flag: &AtomicBool) -> Result<(), String> {
-    use crate::core::{RunMode, PacketEngine as _, pipeline::PassThroughEngine};
-    use crate::core::phase2_config::Phase2Config;
-    use crate::core::config_loader::load_config;
     use crate::capture::windivert::WinDivertCapture;
+    use crate::core::config_loader::load_config;
+    use crate::core::{pipeline::PassThroughEngine, PacketEngine as _, RunMode};
 
     let app_dir = windivert_adapter::application_dir()
         .map_err(|e| format!("Cannot determine application directory: {e}"))?;
 
-    let loaded = load_config(&app_dir)
-        .map_err(|e| format!("Configuration error: {e}"))?;
+    let loaded = load_config(&app_dir).map_err(|e| format!("Configuration error: {e}"))?;
 
-    let mode = if loaded.dry_run { RunMode::DryRun } else { RunMode::Active };
-
-    let p2_config = Phase2Config::load().map(|(c, _)| c).ok();
+    let mode = if loaded.dry_run {
+        RunMode::DryRun
+    } else {
+        RunMode::Active
+    };
 
     let dynamic_filter = loaded.filter_engine.build_windivert_filter();
-    let capture = match WinDivertCapture::open_filter(&dynamic_filter, mode) {
-        Ok(c) => c,
-        Err(_) => {
-            if let Some(ref p2) = p2_config {
-                WinDivertCapture::open(p2, mode)
-                    .map_err(|e| format!("Capture open failed: {e}"))?
-            } else {
-                return Err("Capture open failed: unable to initialize WinDivert driver".into());
-            }
-        }
-    };
+    let capture = WinDivertCapture::open_filter(&dynamic_filter, mode)
+        .map_err(|error| format!("Capture open failed: {error}"))?;
 
-    let strategy_impl: Box<dyn crate::strategies::Strategy> = match loaded.strategy.as_str() {
-        "pass-through" => Box::new(crate::strategies::PassThrough),
-        "split-tcp-only" => Box::new(crate::strategies::SplitTcp::default()),
-        _ => Box::new(crate::strategies::AutoBypass::default()),
-    };
+    let strategy_impl = crate::strategies::create(&loaded.strategy)
+        .map_err(|error| format!("Unsupported strategy: {error}"))?;
 
     let flow_table = crate::core::flow::FlowTable::new(
         loaded.max_flows,
@@ -264,6 +272,8 @@ fn run_engine_as_service(stop_flag: &AtomicBool) -> Result<(), String> {
         |_counters| {},
     );
 
-    engine.run(mode, stop_flag).map_err(|e| format!("Engine execution error: {e:?}"))?;
+    engine
+        .run(mode, stop_flag)
+        .map_err(|e| format!("Engine execution error: {e:?}"))?;
     Ok(())
 }

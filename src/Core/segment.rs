@@ -6,9 +6,9 @@
 //!   - seg2.seq == original.seq + seg1.payload.len()
 //!   - IPv4/IPv6 total lengths and checksums are recomputed and valid.
 
-use std::net::IpAddr;
 use super::checksum::{ipv4_header_checksum, tcp_checksum, udp_checksum};
 use super::parser::{parse, TransportMetadata};
+use std::net::IpAddr;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SegmentError {
@@ -32,9 +32,16 @@ pub fn split_tcp_packet(
 
     let (src_ip, dst_ip, ip_hdr_len) = (meta.source, meta.destination, meta.header_length);
     let (tcp_data_offset, orig_flags) = match meta.transport {
-        TransportMetadata::Tcp { data_offset, flags, .. } => (usize::from(data_offset) * 4, flags),
+        TransportMetadata::Tcp {
+            data_offset, flags, ..
+        } => (usize::from(data_offset) * 4, flags),
         _ => return Err(SegmentError::NotTcp),
     };
+    // SYN/FIN consume sequence space; RST/URG and authenticated options need
+    // protocol-specific handling. Keep those packets intact in this profile.
+    if orig_flags & (0x01 | 0x02 | 0x04 | 0x20) != 0 {
+        return Err(SegmentError::UnsupportedProtocol);
+    }
 
     let tcp_hdr_start = ip_hdr_len;
     let tcp_hdr_end = tcp_hdr_start + tcp_data_offset;
@@ -62,9 +69,7 @@ pub fn split_tcp_packet(
 
     // ── Build Segment 1 ──────────────────────────────────────────────────────
     let seg1 = build_tcp_segment(
-        meta.version,
-        src_ip,
-        dst_ip,
+        (meta.version, src_ip, dst_ip),
         &original_packet[..ip_hdr_len],
         &original_packet[tcp_hdr_start..tcp_hdr_end],
         orig_seq,
@@ -76,9 +81,7 @@ pub fn split_tcp_packet(
     // ── Build Segment 2 ──────────────────────────────────────────────────────
     let seg2_seq = orig_seq.wrapping_add(payload_offset as u32);
     let seg2 = build_tcp_segment(
-        meta.version,
-        src_ip,
-        dst_ip,
+        (meta.version, src_ip, dst_ip),
         &original_packet[..ip_hdr_len],
         &original_packet[tcp_hdr_start..tcp_hdr_end],
         seg2_seq,
@@ -91,9 +94,7 @@ pub fn split_tcp_packet(
 }
 
 fn build_tcp_segment(
-    version: u8,
-    src_ip: IpAddr,
-    dst_ip: IpAddr,
+    network: (u8, IpAddr, IpAddr),
     orig_ip_hdr: &[u8],
     orig_tcp_hdr: &[u8],
     seq: u32,
@@ -101,6 +102,7 @@ fn build_tcp_segment(
     payload: &[u8],
     id_delta: u16,
 ) -> Vec<u8> {
+    let (version, src_ip, dst_ip) = network;
     let ip_hdr_len = orig_ip_hdr.len();
     let tcp_hdr_len = orig_tcp_hdr.len();
     let total_len = ip_hdr_len + tcp_hdr_len + payload.len();
@@ -176,7 +178,8 @@ pub fn create_fake_udp_packet(
     // Copy original IP header
     packet[..ip_hdr_len].copy_from_slice(&original_packet[..ip_hdr_len]);
     // Copy original UDP ports (bytes 0..4 of UDP header: src_port, dst_port)
-    packet[udp_hdr_start..udp_hdr_start + 4].copy_from_slice(&original_packet[udp_hdr_start..udp_hdr_start + 4]);
+    packet[udp_hdr_start..udp_hdr_start + 4]
+        .copy_from_slice(&original_packet[udp_hdr_start..udp_hdr_start + 4]);
     // Set new UDP length (bytes 4..6 of UDP header)
     packet[udp_hdr_start + 4..udp_hdr_start + 6].copy_from_slice(&(udp_len as u16).to_be_bytes());
     // Zero UDP checksum placeholder (bytes 6..8 of UDP header)
@@ -200,12 +203,15 @@ pub fn create_fake_udp_packet(
 
     // Recompute UDP checksum
     let udp_csum = udp_checksum(src_ip, dst_ip, &packet[udp_hdr_start..]);
-    let csum_bytes = if udp_csum == 0 { [0xff, 0xff] } else { udp_csum.to_be_bytes() };
+    let csum_bytes = if udp_csum == 0 {
+        [0xff, 0xff]
+    } else {
+        udp_csum.to_be_bytes()
+    };
     packet[udp_hdr_start + 6..udp_hdr_start + 8].copy_from_slice(&csum_bytes);
 
     Ok(packet)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -225,7 +231,7 @@ mod tests {
         pkt[2..4].copy_from_slice(&(total_len as u16).to_be_bytes());
         pkt[4..6].copy_from_slice(&0x1234u16.to_be_bytes());
         pkt[8] = 64; // TTL
-        pkt[9] = 6;  // Protocol TCP
+        pkt[9] = 6; // Protocol TCP
         pkt[12..16].copy_from_slice(&src.octets());
         pkt[16..20].copy_from_slice(&dst.octets());
         let ip_csum = ipv4_header_checksum(&pkt[..20]);
@@ -233,9 +239,9 @@ mod tests {
 
         // TCP header
         pkt[20..22].copy_from_slice(&12345u16.to_be_bytes()); // src port
-        pkt[22..24].copy_from_slice(&443u16.to_be_bytes());   // dst port
+        pkt[22..24].copy_from_slice(&443u16.to_be_bytes()); // dst port
         pkt[24..28].copy_from_slice(&100_000u32.to_be_bytes()); // seq
-        pkt[28..32].copy_from_slice(&50_000u32.to_be_bytes());  // ack
+        pkt[28..32].copy_from_slice(&50_000u32.to_be_bytes()); // ack
         pkt[32] = 0x50; // offset 5 (20 bytes)
         pkt[33] = 0x18; // ACK + PSH
         pkt[34..36].copy_from_slice(&8192u16.to_be_bytes()); // window
@@ -272,10 +278,18 @@ mod tests {
         assert_eq!([payload1, payload2].concat(), payload);
 
         // Invariant: sequence numbers
-        let seq1 = u32::from_be_bytes([seg1[meta1.header_length + 4], seg1[meta1.header_length + 5],
-                                       seg1[meta1.header_length + 6], seg1[meta1.header_length + 7]]);
-        let seq2 = u32::from_be_bytes([seg2[meta2.header_length + 4], seg2[meta2.header_length + 5],
-                                       seg2[meta2.header_length + 6], seg2[meta2.header_length + 7]]);
+        let seq1 = u32::from_be_bytes([
+            seg1[meta1.header_length + 4],
+            seg1[meta1.header_length + 5],
+            seg1[meta1.header_length + 6],
+            seg1[meta1.header_length + 7],
+        ]);
+        let seq2 = u32::from_be_bytes([
+            seg2[meta2.header_length + 4],
+            seg2[meta2.header_length + 5],
+            seg2[meta2.header_length + 6],
+            seg2[meta2.header_length + 7],
+        ]);
         assert_eq!(seq1, 100_000);
         assert_eq!(seq2, 100_000 + split_offset as u32);
     }
@@ -312,7 +326,10 @@ mod tests {
         assert_eq!(&fake_pkt[20..22], &50000u16.to_be_bytes());
         assert_eq!(&fake_pkt[22..24], &50001u16.to_be_bytes());
         // Verify valid IP checksum
-        assert_eq!(crate::core::checksum::internet_checksum(&fake_pkt[..20]), 0x0000);
+        assert_eq!(
+            crate::core::checksum::internet_checksum(&fake_pkt[..20]),
+            0x0000
+        );
         // Verify valid UDP checksum
         let mut pseudo = Vec::new();
         pseudo.extend_from_slice(&src.octets());
@@ -324,5 +341,3 @@ mod tests {
         assert_eq!(crate::core::checksum::internet_checksum(&pseudo), 0x0000);
     }
 }
-
-

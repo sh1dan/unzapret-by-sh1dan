@@ -1,14 +1,14 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
-use crate::capture::{CaptureError, ErrorKind, PacketCapture, ReceiveEvent, CapturedPacket};
-use crate::filtering::{DestinationFilter, FilterDecision, FilterEngine};
-use crate::strategies::{Strategy, ProcessResult};
 use super::{
     flow::{FlowClassification, FlowKey, FlowTable},
     parser::{self, ParseError, TransportMetadata},
     segment::split_tcp_packet,
     Counters, EngineError, InitialMetadata, PacketContext, PacketEngine, RunMode, Transport,
 };
+use crate::capture::{CaptureError, CapturedPacket, ErrorKind, PacketCapture, ReceiveEvent};
+use crate::filtering::{DestinationFilter, FilterDecision, FilterEngine};
+use crate::strategies::{ProcessResult, Strategy};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 /// Active packet processing engine executing allowlist evaluation,
 /// flow tracking, and evasion strategies (such as Split-TCP).
@@ -40,16 +40,23 @@ impl<C: PacketCapture> ActivePipelineEngine<C> {
     }
 
     fn pump(&mut self, mode: RunMode, stop: &AtomicBool) -> Result<Counters, EngineError> {
-        if self.capture.mode() != mode { return Err(EngineError::InvalidConfiguration); }
+        if self.capture.mode() != mode {
+            return Err(EngineError::InvalidConfiguration);
+        }
         let mut stopping = None;
         let mut report_at = Instant::now();
         loop {
             if stop.load(Ordering::Acquire) && stopping.is_none() {
-                self.capture.shutdown_receive().map_err(EngineError::Capture)?;
+                self.capture
+                    .shutdown_receive()
+                    .map_err(EngineError::Capture)?;
                 stopping = Some(Instant::now());
             }
             if stopping.is_some_and(|start: Instant| start.elapsed() > Duration::from_secs(3)) {
-                return Err(EngineError::Capture(CaptureError::new(ErrorKind::Shutdown, None)));
+                return Err(EngineError::Capture(CaptureError::new(
+                    ErrorKind::Shutdown,
+                    None,
+                )));
             }
             if report_at.elapsed() >= Duration::from_secs(5) {
                 (self.report)(self.counters);
@@ -69,8 +76,12 @@ impl<C: PacketCapture> ActivePipelineEngine<C> {
             let packet = match event {
                 ReceiveEvent::Idle => continue,
                 ReceiveEvent::End if stopping.is_some() => return Ok(self.counters),
-                ReceiveEvent::End => return Err(EngineError::Capture(
-                    CaptureError::new(ErrorKind::Receive, None))),
+                ReceiveEvent::End => {
+                    return Err(EngineError::Capture(CaptureError::new(
+                        ErrorKind::Receive,
+                        None,
+                    )))
+                }
                 ReceiveEvent::Packet(packet) => packet,
             };
             self.counters.processed += 1;
@@ -101,12 +112,16 @@ impl<C: PacketCapture> ActivePipelineEngine<C> {
             };
 
             let (src_port, dst_port, transport) = match metadata.transport {
-                TransportMetadata::Tcp { source_port, destination_port, .. } => {
-                    (source_port, destination_port, Transport::Tcp)
-                }
-                TransportMetadata::Udp { source_port, destination_port, .. } => {
-                    (source_port, destination_port, Transport::Udp)
-                }
+                TransportMetadata::Tcp {
+                    source_port,
+                    destination_port,
+                    ..
+                } => (source_port, destination_port, Transport::Tcp),
+                TransportMetadata::Udp {
+                    source_port,
+                    destination_port,
+                    ..
+                } => (source_port, destination_port, Transport::Udp),
             };
 
             // Flow classification
@@ -117,12 +132,12 @@ impl<C: PacketCapture> ActivePipelineEngine<C> {
                 dst_port,
                 transport,
             };
-            let flow_class = self.flow_table.classify(flow_key);
-            let is_initial = flow_class == FlowClassification::InitialPayload;
 
             // Extract transport payload
             let payload_offset = match metadata.transport {
-                TransportMetadata::Tcp { data_offset, .. } => metadata.header_length + usize::from(data_offset) * 4,
+                TransportMetadata::Tcp { data_offset, .. } => {
+                    metadata.header_length + usize::from(data_offset) * 4
+                }
                 TransportMetadata::Udp { .. } => metadata.header_length + 8,
             };
             let payload = if payload_offset <= packet.bytes.len() {
@@ -130,6 +145,14 @@ impl<C: PacketCapture> ActivePipelineEngine<C> {
             } else {
                 &[]
             };
+
+            // SYN/ACK without data must not consume the initial payload budget.
+            if payload.is_empty() {
+                self.reinject_unmodified(mode, &packet)?;
+                continue;
+            }
+            let flow_class = self.flow_table.classify(flow_key);
+            let is_initial = flow_class == FlowClassification::InitialPayload;
 
             // Inspect application-layer metadata (TLS ClientHello SNI, QUIC Initial)
             let mut server_name = None;
@@ -144,7 +167,9 @@ impl<C: PacketCapture> ActivePipelineEngine<C> {
                 }
                 Transport::Udp => {
                     if let Ok(quic_hdr) = super::quic::parse_quic_initial(payload) {
-                        initial = InitialMetadata::QuicInitial { version: quic_hdr.version };
+                        initial = InitialMetadata::QuicInitial {
+                            version: quic_hdr.version,
+                        };
                     } else if super::stun::parse_stun(payload).is_ok() {
                         initial = InitialMetadata::Stun;
                     }
@@ -166,6 +191,9 @@ impl<C: PacketCapture> ActivePipelineEngine<C> {
 
             // Destination filtering (now takes advantage of open SNI for domain allowlists!)
             context.filter = self.filter_engine.evaluate(&context);
+            if context.filter == FilterDecision::Allow && is_initial {
+                self.counters.eligible += 1;
+            }
 
             let plan = crate::strategies::evaluate(&*self.strategy, &context, mode);
 
@@ -175,13 +203,12 @@ impl<C: PacketCapture> ActivePipelineEngine<C> {
                 }
                 ProcessResult::WouldModify => {
                     // Dry-run mode: count modification intention, do not send
-                    self.counters.modified += 1;
+                    self.counters.would_modify += 1;
                 }
                 ProcessResult::SplitTcp { payload_offset } => {
                     // Active mode Split-TCP
                     match split_tcp_packet(&packet.bytes, payload_offset) {
                         Ok((seg1_bytes, seg2_bytes)) => {
-                            self.counters.modified += 1;
                             let seg1 = CapturedPacket {
                                 bytes: seg1_bytes,
                                 address: packet.address.clone(),
@@ -205,6 +232,7 @@ impl<C: PacketCapture> ActivePipelineEngine<C> {
                                 return Err(EngineError::Capture(error));
                             }
                             self.counters.reinserted += 1;
+                            self.counters.modified += 1;
                         }
                         Err(_) => {
                             // If split failed (e.g. payload too small), pass through safely
@@ -212,10 +240,17 @@ impl<C: PacketCapture> ActivePipelineEngine<C> {
                         }
                     }
                 }
-                ProcessResult::FakeUdp { payload_type, repeats } => {
+                ProcessResult::FakeUdp {
+                    payload_type,
+                    repeats,
+                } => {
                     let fake_payload = match payload_type {
-                        crate::strategies::FakeUdpType::DiscordVoice => super::payloads::DISCORD_VOICE_UDP_FAKE,
-                        crate::strategies::FakeUdpType::Quic => super::payloads::GOOGLE_QUIC_UDP_FAKE,
+                        crate::strategies::FakeUdpType::DiscordVoice => {
+                            super::payloads::DISCORD_VOICE_UDP_FAKE
+                        }
+                        crate::strategies::FakeUdpType::Quic => {
+                            super::payloads::GOOGLE_QUIC_UDP_FAKE
+                        }
                     };
 
                     match super::segment::create_fake_udp_packet(&packet.bytes, fake_payload) {
@@ -252,8 +287,11 @@ impl<C: PacketCapture> ActivePipelineEngine<C> {
         }
     }
 
-
-    fn reinject_unmodified(&mut self, mode: RunMode, packet: &CapturedPacket<C::Address>) -> Result<(), EngineError> {
+    fn reinject_unmodified(
+        &mut self,
+        mode: RunMode,
+        packet: &CapturedPacket<C::Address>,
+    ) -> Result<(), EngineError> {
         if mode == RunMode::Active {
             if let Err(error) = self.capture.send(packet) {
                 self.counters.send_errors += 1;
@@ -270,12 +308,21 @@ impl<C: PacketCapture> ActivePipelineEngine<C> {
 impl<C: PacketCapture> PacketEngine for ActivePipelineEngine<C> {
     fn run(&mut self, mode: RunMode, stop: &AtomicBool) -> Result<Counters, EngineError> {
         let result = self.pump(mode, stop);
-        let shutdown = self.capture.shutdown_receive().map_err(EngineError::Capture);
+        let shutdown = self
+            .capture
+            .shutdown_receive()
+            .map_err(EngineError::Capture);
         let close = self.capture.close().map_err(EngineError::Capture);
-        if shutdown.is_err() || close.is_err() { self.counters.errors += 1; }
-        result.and(shutdown.map(|()| self.counters)).and(close.map(|()| self.counters))
+        if shutdown.is_err() || close.is_err() {
+            self.counters.errors += 1;
+        }
+        result
+            .and(shutdown.map(|()| self.counters))
+            .and(close.map(|()| self.counters))
     }
-    fn counters(&self) -> Counters { self.counters }
+    fn counters(&self) -> Counters {
+        self.counters
+    }
 }
 
 // Keep PassThroughEngine backwards compatibility for existing contract tests
